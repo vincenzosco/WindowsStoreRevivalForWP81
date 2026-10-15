@@ -16,6 +16,12 @@ node_modules/
 Thumbs.db
 desktop.ini
 
+# Isolated storage snapshots. `node tools/app.mjs report` keeps its snapshot under the
+# system temp directory; these rules catch one that lands here instead, which happens
+# when a path is handed to ISETool through a shell that rewrites backslashes.
+IsolatedStore/
+Users*/
+
 # --- Store Patcher (Windows Phone app) -------------------------------------
 # The app keeps its own Visual Studio .gitignore next to the solution; these are
 # repeated here so build output and machine-local state can never be committed by
