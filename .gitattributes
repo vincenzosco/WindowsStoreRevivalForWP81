@@ -1,0 +1,7 @@
+# Normalize line endings on commit, but keep shell scripts LF: a CRLF start.sh
+# does not run under bash, and the .mjs sources are executed by node directly.
+* text=auto
+*.sh text eol=lf
+*.mjs text eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf

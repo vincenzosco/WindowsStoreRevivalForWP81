@@ -1,0 +1,92 @@
+{
+  "_comment": "WP8.1 Store interception lab. Everything the server does is driven by this file.",
+
+  "network": {
+    "_comment_advertiseIp": "'auto' picks the LAN IPv4 of the default route; override with an explicit address when the PC has several NICs.",
+    "advertiseIp": "auto"
+  },
+
+  "dns": {
+    "enabled": true,
+    "port": 53,
+    "_comment_bind": "'auto' tries the LAN address first, then 0.0.0.0. Needed because Windows ICS parks on 0.0.0.0:53.",
+    "bind": "auto",
+    "upstream": ["1.1.1.1", "8.8.8.8"],
+    "hijack": {
+      "_comment": "Names matching these globs resolve to advertiseIp instead of the real address. Start narrow: only what the capture proves is Store traffic.",
+      "ip": "auto",
+      "_comment_hosts": "The marketplace image/content hosts come from Microsoft partners' own firewall guidance for Windows 8.1 store access, which names them alongside marketplaceedgeservice.",
+      "names": [
+        "wscont1.apps.microsoft.com",
+        "wscont2.apps.microsoft.com",
+        "*.apps.microsoft.com",
+        "catalog.zune.net",
+        "*.zune.net",
+        "marketplaceedgeservice.windowsphone.com",
+        "*.marketplaceedgeservice.windowsphone.com",
+        "*.marketplaceimages.windowsphone.com",
+        "*.marketplacecontent.windowsphone.com"
+      ]
+    },
+    "logQueries": true
+  },
+
+  "proxy": {
+    "enabled": true,
+    "port": 8899,
+    "_comment_tls": "Direct TLS listener on 443: a device redirected by DNS alone connects here without needing any proxy setting.",
+    "tlsEnabled": true,
+    "tlsPort": 443,
+    "_comment_http": "Plain-HTTP listener on 80: the 8.1 store lookups, search and app images are served over HTTP, so without this the device resolves the hijacked name, connects to 80 and only gets a RST.",
+    "httpEnabled": true,
+    "httpPort": 80,
+    "mitm": {
+      "_comment": "Only these hosts are TLS-intercepted. Every other host is tunnelled byte-for-byte and never decrypted, so unrelated device traffic is untouched.",
+      "mode": "listed",
+      "hosts": [
+        "wscont1.apps.microsoft.com",
+        "wscont2.apps.microsoft.com",
+        "*.apps.microsoft.com",
+        "catalog.zune.net",
+        "*.zune.net",
+        "marketplaceedgeservice.windowsphone.com",
+        "*.marketplaceedgeservice.windowsphone.com",
+        "*.marketplaceimages.windowsphone.com",
+        "*.marketplacecontent.windowsphone.com"
+      ]
+    },
+    "tunnel": {
+      "blockHosts": []
+    }
+  },
+
+  "pki": {
+    "dir": "ca",
+    "commonName": "WP Store Lab Root CA",
+    "days": 3650,
+    "leafDays": 825,
+    "openssl": ""
+  },
+
+  "capture": {
+    "enabled": true,
+    "dir": "captures",
+    "inlineBodyMaxBytes": 4096,
+    "maxBodyBytes": 2097152
+  },
+
+  "upstream": {
+    "_comment": "insecure=false keeps certificate validation on when we relay to the real backend.",
+    "insecure": false,
+    "timeoutMs": 20000
+  },
+
+  "livestore": {
+    "_comment": "Zinc API (Live Store Public API). Get a key from the One Live Developer Centre, app for the Live Store realm.",
+    "baseUrl": "https://zinc.onelive.me/v1",
+    "apiKey": "",
+    "cacheTtlMs": 300000
+  },
+
+  "rules": []
+}

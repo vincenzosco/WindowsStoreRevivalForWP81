@@ -1,0 +1,31 @@
+# generated lab material
+ca/
+captures/
+.selftest/
+*.log
+
+# dependencies (the project is zero-dependency, but keep this anyway)
+node_modules/
+
+# the cloned upstream skill router
+.reverse-skill/
+
+# editor noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# --- Store Patcher (Windows Phone app) -------------------------------------
+# The app keeps its own Visual Studio .gitignore next to the solution; these are
+# repeated here so build output and machine-local state can never be committed by
+# accident, even if that file is ever dropped.
+StorePatcher/**/Bin/
+StorePatcher/**/obj/
+StorePatcher/**/.vs/
+StorePatcher/**/*.xap
+StorePatcher/**/*.appx
+StorePatcher/**/*.suo
+StorePatcher/**/*.user
+StorePatcher/**/*.appxrecipe
+StorePatcher/**/AppPackages/

@@ -1,0 +1,26 @@
+{
+  "name": "wp8-store-lab",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DNS hijack + selective TLS MITM lab used to capture and patch Windows Phone 8.1 Store traffic, mapping it onto the Live Store (Zinc) API.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/main.mjs",
+    "dns": "node src/main.mjs --only=dns",
+    "proxy": "node src/main.mjs --only=proxy",
+    "selftest": "node tools/selftest.mjs",
+    "dnsprobe": "node tools/dnsprobe.mjs",
+    "analyze": "node tools/analyze-captures.mjs",
+    "watch": "node tools/watch.mjs",
+    "doctor": "node tools/doctor.mjs",
+    "canary": "node tools/canary.mjs",
+    "rehearse": "node tools/rehearse.mjs",
+    "make-rootreg": "node tools/make-rootreg.mjs",
+    "verify-rootreg": "node tools/make-rootreg.mjs --verify",
+    "start:wp80": "node --tls-min-v1.0 src/main.mjs"
+  },
+  "dependencies": {}
+}

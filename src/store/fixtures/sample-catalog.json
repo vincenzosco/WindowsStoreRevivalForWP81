@@ -1,0 +1,56 @@
+{
+  "_note": "Sample data for offline testing of the bridge. Not real store listings.",
+
+  "categories": [
+    "social",
+    "music + video",
+    "tools + productivity",
+    "lifestyle",
+    "kids + family",
+    "news + weather",
+    "sports",
+    "books + reference"
+  ],
+
+  "apps": [
+    {
+      "id": "1",
+      "name": "Sample Notes",
+      "description": "Placeholder entry used to prove the catalog bridge end to end.",
+      "developer": "Lab Fixture",
+      "publisher": "Lab Fixture",
+      "category": "tools + productivity",
+      "icon": "https://example.invalid/icon/1.png",
+      "url": "https://example.invalid/app/1",
+      "protoUrl": "https://example.invalid/proto/1",
+      "version": "1.0.0",
+      "release_date": "2024-01-15"
+    },
+    {
+      "id": "2",
+      "name": "Sample Radio",
+      "description": "Second placeholder entry, different category.",
+      "developer": "Lab Fixture",
+      "publisher": "Lab Fixture",
+      "category": "music + video",
+      "icon": "https://example.invalid/icon/2.png",
+      "url": "https://example.invalid/app/2",
+      "protoUrl": "https://example.invalid/proto/2",
+      "version": "2.1.0",
+      "release_date": "2024-06-02"
+    },
+    {
+      "id": "3",
+      "name": "Sample Weather",
+      "description": "Third placeholder entry.",
+      "developer": "Lab Fixture",
+      "publisher": "Lab Fixture",
+      "category": "news + weather",
+      "icon": "https://example.invalid/icon/3.png",
+      "url": "https://example.invalid/app/3",
+      "protoUrl": "https://example.invalid/proto/3",
+      "version": "0.9.1",
+      "release_date": "2023-11-20"
+    }
+  ]
+}
