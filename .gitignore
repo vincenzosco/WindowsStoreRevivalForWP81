@@ -16,24 +16,8 @@ node_modules/
 Thumbs.db
 desktop.ini
 
-# Isolated storage snapshots. `node tools/app.mjs report` keeps its snapshot under the
-# system temp directory; these rules catch one that lands here instead, which happens
-# when a path is handed to ISETool through a shell that rewrites backslashes.
+# Isolated storage snapshots, left by the WP8.1 reporting tool this repo used to
+# ship. Nothing writes them any more; the rule stays so an old one cannot be
+# committed by accident.
 IsolatedStore/
 Users*/
-
-# --- Store Patcher (Windows Phone app) -------------------------------------
-# The app keeps its own Visual Studio .gitignore next to the solution; these are
-# repeated here so build output and machine-local state can never be committed by
-# accident, even if that file is ever dropped.
-StorePatcher/**/Bin/
-StorePatcher/**/obj/
-StorePatcher/**/.vs/
-StorePatcher/**/*.xap
-StorePatcher/**/*.appx
-StorePatcher/**/*.suo
-StorePatcher/**/*.user
-StorePatcher/**/*.appxrecipe
-StorePatcher/**/AppPackages/
-# Per-install, generated from the lab CA by `node tools/app.mjs patch`.
-StorePatcher/**/patches.json

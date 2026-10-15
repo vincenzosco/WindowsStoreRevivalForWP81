@@ -28,10 +28,12 @@ sul sistema.
 | Blob di registro per la CA root | ✅ **byte-identico** a quello che produce Windows |
 | Client Zinc (Live Store API) | ✅ 5/5 contro il servizio live, incluso il rifiuto `AC5` |
 | Handler Store (`src/store/`) + bridge catalogo | ✅ verificato |
-| Self-test end-to-end (meccanismi, su 127.0.0.1) | ✅ **24/24** |
-| Prova di schieramento sui nomi host reali dello Store | ✅ **19/19** |
-| Cattura reale dallo Store del Lumia 625 | ⏳ da fare (serve puntare il telefono) |
-| Mappatura del protocollo Store vero | ⏳ da fare (serve la cattura + API key) |
+| Self-test end-to-end (meccanismi, su 127.0.0.1) | ✅ **97/97** |
+| Prova di schieramento sui nomi host reali dello Store | ✅ **44/44** |
+| Vocabolario dello Store letto dal telefono, e riverificabile | ✅ **19/19** (`npm run read-vocabulary`) |
+| Cattura reale dallo Store del Lumia (RM-941) | ✅ la pagina viene chiesta, ed è etichettata (`storePages`, `type=003`) |
+| Il telefono **rende** la pagina | ❌ chiede la pagina e poi non chiede più nulla: nessuna immagine, nessun dettaglio |
+| Mappatura del protocollo Store vero | ⏳ in corso (la pagina generata è la variabile in prova) |
 
 `npm test` → `node tools/selftest.mjs`.
 
@@ -152,6 +154,9 @@ npm start
 # 2. prova la catena completa sui nomi host reali, senza il telefono
 npm run rehearse
 
+# 2b. e rileggi dal telefono il vocabolario con cui la pagina dello Store va costruita
+npm run read-vocabulary    # fallisce se il modulo e il dispositivo non sono più d'accordo
+
 # 3. in un altro terminale, guarda se il telefono è davvero puntato qui
 npm run watch          # mostra solo il traffico che NON viene da questo PC
 
@@ -213,11 +218,43 @@ dirottamento DNS da solo non intercetta.
 > Un canary muto su una finestra senza query del telefono non è una prova — verifica
 > prima che il device abbia parlato (`npm run watch`).
 
+### Quando il lab sembra occupato ma sta solo parlando con sé stesso
+
+Se anche il **PC** ha il lab fra i suoi server DNS (`192.168.0.220` su una scheda),
+un nome dirottato si risolve — *su questo PC* — nell'indirizzo del lab: il rilancio
+verso l'upstream richiama il lab, ogni hop aspetta quello sotto, e nessuno risponde
+mai. Il registro si riempie di richieste che portano gli header del telefono ma
+arrivano dall'indirizzo del **PC**: è la traccia più ingannevole di tutte, perché
+il telefono non c'entra e i contatori salgono come se fosse lui.
+
+Riconoscerlo:
+
+```bash
+node -e "require('dns').lookup('cdn.marketplaceedgeservice.windowsphone.com',(e,a)=>console.log(a))"
+# 192.168.0.220  ->  è il lab, non un CDN: questo PC si sta rimbalzando la richiesta
+```
+
+La richiesta viene ora **rifiutata subito** (`error: upstream_loop`, contatore
+`upstreamLoops`) invece di restare appesa per tutto l'upstream timeout. Il rimedio
+è togliere il lab dai DNS del PC — il telefono continua a usarlo — oppure rispondere
+a quel nome con una regola `mock`.
+
 ### Prova di schieramento — `npm run rehearse`
 
 Ripete per ogni nome hijackato esattamente quello che farà il telefono: risolve
 contro il DNS del lab, apre il TCP, fa il CONNECT, negozia TLS con quel nome come
 SNI fidandosi **solo** della CA del lab, e legge la risposta.
+
+La richiesta di pagina dello Store viene ripetuta **due volte**: come sopra, e di
+nuovo in HTTP semplice sulla porta 80 con l'header `user-agent: ZDM/4.0; Windows
+Mobile 8.1` e nessun `Accept`, che è il modo in cui la cattura mostra che il
+telefono la fa davvero. Ripeterla solo in TLS lascerebbe non provato proprio il
+listener su cui il dispositivo parla.
+
+Sulla pagina servita controlla anche le tre cose che rendono una pagina
+inutilizzabile pur essendo ben formata: che il tipo di pagina sia uno che il
+client nomina, che il tipo di template sia uno che il telefono stila, e che il
+blocco panes ci sia.
 
 Un `502` sulla richiesta è un **pass**: significa che il backend Microsoft non
 risponde più — ed è precisamente l'elenco degli endpoint da emulare. Deve invece
@@ -337,6 +374,7 @@ passthrough**: un bug in un handler non rompe il telefono.
 | Handler | Cosa fa | Attivo di default? |
 |---|---|---|
 | `store-health` | Risponde su `<host intercettato>/__store/health` con un JSON che prova che la richiesta è arrivata al lab e la risposta è tornata indietro, senza toccare alcun backend | sì |
+| `store-protocol` | Risponde agli endpoint che il telefono chiama **davvero** per aprire lo Store (`/v9/catalog/storePages`, `/v8/catalog/hubs`, `/v[89]/catalog/apps`), nel formato XML che sa leggere | no, va abilitato |
 | `catalog-bridge` | Serve il catalogo Live Store sotto un prefisso di path sugli host intercettati | no, va abilitato |
 
 ### Abilitare il bridge
@@ -370,12 +408,298 @@ Con `source: "zinc"` e nessuna API key la risposta è `502` con `error: NO_API_K
 > `livestore.bridge` e fare `POST /__lab/reload` ha effetto immediato.
 > Il self-test lo verifica cambiando sorgente a metà corsa.
 
-### Mappare il protocollo vero
+### Il protocollo vero dello Store (`store-protocol`)
 
-Il bridge risponde nel formato del **catalogo Live Store**, non in quello dello
-Store Microsoft: quello si può scrivere solo dopo aver visto la cattura. La
-sequenza è: cattura → `npm run analyze` → aggiungi un handler che produce la forma
-che lo Store si aspetta, prendendo i dati da `zinc`.
+Il bridge risponde nel formato del catalogo **Live Store**; `store-protocol` risponde
+nel formato dello **Store Microsoft**, ed è quello che serve al telefono per aprire lo
+Store. La differenza non è stilistica: sono due grammatiche diverse per due client
+diversi.
+
+Quello che il telefono chiede aprendo lo Store, parola per parola dalla cattura del
+Lumia:
+
+```
+GET  http://cdn.marketplaceedgeservice.windowsphone.com/v9/catalog/storePages
+         ?typeId=DynamicHub.Main&os=8.10.14219.0&cc=IT&lang=it-IT&hw=402699266&dm=RM-941_eu_france_308&...
+POST http://marketplaceedgeservice.windowsphone.com/v8/catalog/updates?os=8.10.14219.0&...
+```
+
+La prima è servita da `src/store/protocol.mjs`. La seconda resta in passthrough: la
+cattura mostra che il dispositivo prosegue verso la home page dopo il fallimento, e
+non esiste una cattura di una risposta a quella richiesta da copiare.
+
+#### Perché va servita e non inoltrata
+
+Misurato, non assunto. Interrogando gli host veri da questo PC con un resolver
+pubblico (così il dirottamento del lab non può rispondere al posto loro):
+
+| Nome | Esito |
+|---|---|
+| `marketplaceedgeservice.windowsphone.com` | NXDOMAIN |
+| `catalog.zune.net` | NXDOMAIN |
+| `wscont1.apps.microsoft.com` | NXDOMAIN |
+| `cdn.marketplaceedgeservice.windowsphone.com` | risolve (CNAME → `…edgesuite.net` → Akamai), ma l'edge risponde `503 Service Unavailable - DNS failure` |
+
+Cioè: la porta d'ingresso del CDN è ancora in piedi, la sua origine non esiste più. Il
+`502` con cui finiva ogni richiesta dello Store non era quindi risolvibile inoltrandola
+meglio: la pagina va **prodotta** qui.
+
+#### Da dove viene il formato
+
+Non è inventato. `src/store/catalog-feed.mjs` lo costruisce da risposte reali del
+servizio conservate dalla Wayback Machine — tre generazioni della stessa grammatica — e
+ogni elemento in quel file cita la cattura da cui proviene:
+
+| Cattura archiviata | Cosa stabilisce |
+|---|---|
+| `/v3.2/en-US/clientTypes/WinMobile 7.1/hubTypes/marketplace/hub` | la home del marketplace: `<templateName>MarketplaceHub</templateName>`, una voce con `<editorialItems>` e `<features>` |
+| `/v8/catalog/hubs?…&hub=games` | una pagina hub di WP8: `<templateName>GamesHub</templateName>`, `<editorialItems>` e le `<applications>` a cui puntano |
+| `/v8/catalog/apps?…`, `/v9/catalog/apps?…` | una lista di applicazioni WP8/WP8.1: un `<a:entry>` per app |
+
+Sono tutte feed Atom nel namespace `http://schemas.zune.net/catalog/apps/2008/02`, con un
+blocco `<templates>` che nomina il modello UI con cui la pagina viene resa. È questo che
+rende possibile la cosa: `storePages?typeId=DynamicHub.Main` è la stessa forma una
+generazione dopo.
+
+Gli archivi descrivono la grammatica **v3.2 e v8**. La pagina che questo telefono chiede
+è `/v9/catalog/storePages`, e per quella grammatica la fonte non è un archivio: è il
+dispositivo stesso.
+
+```jsonc
+"livestore": {
+  "protocol": {
+    "enabled": true,                                        // spento di default: servire la
+    "catalogFile": "src/store/fixtures/demo-catalog.json",   // pagina dello Store è una
+    "hubTemplate": "DynamicHub",                             // decisione, non un default
+    "templateType": "003",
+    "templateTypeForm": "both",
+    "pageSize": 25
+  }
+}
+```
+
+`catalogFile` viene riletto quando cambia: iterare su quello che il telefono mostra non
+richiede un riavvio. I cataloghi che il progetto porta sono due, entrambi dati inventati, con
+ogni editore che dice `Lab Fixture`, così nessun listino può passare per reale:
+
+- `src/store/fixtures/demo-catalog.json` — diciassette app su tutte e otto le categorie
+  dichiarate, ed è il default: una pagina con una voce per sezione non si distingue da una
+  pagina che non disegna niente;
+- `src/store/fixtures/sample-catalog.json` — il fixture da tre voci che i test tengono come
+  base di regressione. Passare a quello è quella riga lì.
+
+`npm run store:page` costruisce la pagina offline e stampa cosa c'è dentro, sezione per
+sezione, con prezzo e valutazione di ogni app. È la risposta a «cosa riceverebbe il
+dispositivo», e si legge anche a lab spento e mentre il telefono non mostra altro che un
+codice di assert.
+
+#### Il vocabolario, letto dal telefono
+
+Una pagina può essere perfettamente ben formata e nominare comunque un layout che il
+dispositivo non ha mai sentito. Quel rifiuto è indistinguibile da una pagina sbagliata, ed è
+esattamente quello che hanno incontrato i primi tentativi. Quindi i nomi con cui la pagina è
+costruita sono stati presi dal telefono invece che indovinati:
+
+```
+npm run read-vocabulary        # rilegge il dispositivo montato, e fallisce su ogni deriva
+```
+
+Rispondono due binari del telefono, e devono essere d'accordo — uno analizza una pagina
+dello Store, l'altro la disegna:
+
+| Binario | Cosa stabilisce |
+|---|---|
+| `H:\Windows\System32\ZMarketplace.dll` | i percorsi strutturali che cammina (`/Panes/Pane`, `/Templates/Template`, `/feed/entry`, `/feed/link`), la chiave del tipo di template `TEMPLATETYPE`, i tipi di pagina che chiede (`DynamicHub`, `DynamicChart`, `Collection`), i tipi di link di contenuto (`Application`, `ApplicationCollection`) |
+| `H:\Windows\System32\ZuneAssets480x800.dll` | quali tipi di template sono **stilabili su questo schermo 480×800**: `Store_Hub_TemplateType003`, `004`, `015`, `017` e `Store_Chart_TemplateType010`. E `Store_DynamicHubStyle_*`, lo stile con cui è disegnata la pagina stessa |
+
+Tre scoperte hanno cambiato la pagina, e una è una correzione, non una rifinitura:
+
+- **Il tipo di template è un numero.** La pagina chiedeva un layout di nome `DynamicHub`
+dove il telefono stila `Store_Hub_TemplateType003`. `003` è la lista ordinata semplice,
+che è quello che una sezione generata è; `017` è il layout ricco, con pannello del prezzo,
+motivo del suggerimento e un pulsante per elemento, e chiederebbe al telefono di stilare
+elementi che la pagina non porta.
+- **La pagina non aveva panes.** Il parser conta i panes *prima* dei template
+(`Found %d Store Panes`), e ogni pagina che questo lab aveva servito portava un blocco
+template e **nessun** `<Panes>`: un template senza niente da rendere.
+- **`GamesHub` è il nome sbagliato, e non è mai stato quello giusto.** Compare in
+`ZMarketplace.dll` dentro una serie di chiavi di **impostazioni** persistite
+(`MarketplaceSettings`, `AutoUpdateOn`, `TileCount`, …), e i suoi unici proprietari veri sul
+telefono sono `GamesShared.dll`, `ZMF_Client.dll` e `ZMF_Service.dll` — l'app hub dei Giochi
+Xbox. La pagina archiviata che lo porta è la pagina `hub=games` di un'altra generazione.
+Servirla a una richiesta `storePages?typeId=DynamicHub.Main` non è mai stato un esperimento
+a una variabile sola.
+
+Una domanda che il telefono non può sciogliere sta in un posto solo invece che sparsa nei
+costruttori: se la chiave del tipo viaggi come attributo di `<Template>` o come elemento
+figlio. Il parser tiene `TEMPLATETYPE` come nome di proprietà, non come markup.
+`templateTypeForm` la restringe a `attribute`, `element` o `both`; il default è `both`,
+così qualunque delle due letture trova il valore.
+
+#### Le maniglie che il dispositivo può restituire
+
+Ogni voce è servita sotto un GUID derivato dal suo id di catalogo (UUID v5 su un namespace
+fisso del lab): la stessa voce ha lo stesso GUID a ogni esecuzione, ed è questo che permette
+di ricondurre la richiesta successiva del dispositivo alla voce giusta **senza conservare
+stato**. Una richiesta per un GUID che il lab non ha mai coniato viene rifiutata con
+`404 app_not_found`, non inoltrata.
+
+#### La controprova, e perché non è una variabile sola
+
+La prima volta che lo Store del Lumia è stato aperto contro questo lab, ha chiesto la home
+page, ha ricevuto un `200` con la pagina generata, e ha risposto con l'errore `0x88675309`:
+un assert interno di Windows Phone (`E_JENNY_JENNY_WHO_CAN_I_TURN_TO`, "questo non dovrebbe
+mai accadere") invece di una diagnosi. Dopo di che non ha chiesto **più nulla**, quindi la
+pagina è stata rifiutata mentre veniva letta.
+
+```jsonc
+"livestore": { "protocol": { "serve": "archive" } }   // default: "generated"
+```
+
+Con `serve: "archive"` gli endpoint di pagina rispondono con
+`src/store/fixtures/archive/real-hub-page-20130813.xml`: una risposta del servizio reale,
+scaricata byte per byte dall'archivio.
+
+Quell'esperimento è stato costruito come sostituzione a una variabile e **non lo è**, e la
+lettura del vocabolario l'ha reso evidente dopo. La risposta archiviata è la pagina
+`hub=games` di un'altra generazione: sostituirla cambia tre cose insieme — il tipo di pagina
+(l'hub dei giochi, non l'hub dello Store che questa richiesta nomina), la grammatica
+(`<templateName>` dentro un blocco `<templates>`, dove il client v9 cammina
+`/Templates/Template` e legge `TEMPLATETYPE`) e il proprietario del template (`GamesHub`
+appartiene all'app hub dei Giochi, non allo Store). Un rifiuto non incrimina nessuna delle
+tre separatamente.
+
+La risposta dice tutto questo nei suoi header invece di lasciarlo in un commento, perché una
+cattura non conserva i commenti:
+
+```
+x-lab-protocol:        storePages:archive
+x-lab-archive-template: GamesHub
+x-lab-archive-page:     games-PK-WindowsPhone80-ALL-ALL
+x-lab-archive-warning:  archived response of a different page and grammar generation:
+                        not a one-variable substitution for the requested page
+```
+
+`npm run rehearse` fallisce se una pagina archiviata viene servita senza quegli header, e
+stampa l'equivoco invece di darlo per assodato.
+
+#### Cosa è provato e cosa no
+
+Provato su questa macchina (`npm run selftest`, 109 controlli, e `npm run rehearse`: 44 con i nove
+nomi dello Store, più quattro per ogni nome aggiunto alla lista di dirottamento — 68 con i
+quindici di oggi): il
+feed è ben formato; una voce di catalogo ostile (un `&` grezzo, un `<`, virgolette, un
+carattere di controllo) non può romperlo; ogni voce di catalogo arriva sulla pagina; lo store
+finto che gira davvero è verificato non avere due voci che producono lo stesso GUID, nessuna
+voce in una categoria che nessuno ha dichiarato, nessuna categoria dichiarata e vuota, e tutte
+le sue app sulla pagina esattamente una volta — una volta come il link che la indica e una
+volta come il record che la descrive; un GUID
+torna alla sua voce e uno sconosciuto viene rifiutato; gli endpoint rispondono attraverso il
+proxy **vero** sul path e sulla query esatti che usa il telefono, **sul trasporto che il
+telefono usa** (HTTP semplice sulla porta 80, `ZDM/4.0; Windows Mobile 8.1`, nessun header
+`Accept`), e la cattura del lab li registra; l'handler è spento finché non lo si abilita, e
+in quel caso ricade sul passthrough.
+
+Provato sul vocabolario (`npm run read-vocabulary`, 19 controlli): ogni tipo di pagina, tipo
+di template, percorso strutturale e tipo di link che il modulo dichiara è ancora presente nel
+telefono, all'offset che il modulo cita. Una deriva fa fallire il comando.
+
+Provato sulla pagina: nomina un tipo di template che il telefono stila, il suo nome di
+template appartiene al client dello Store e non a un'altra app, e porta **ogni** percorso
+strutturale che il parser cammina, panes inclusi. Tutte e tre sono verificate contro
+`src/store/vocabulary.mjs`, non contro una copia dell'opinione di chi legge.
+
+**Non provato: che il telefono renda la pagina.** La chiede — ripetutamente, da ultimo
+`200 storePages type=003`, formato `storePage`, 29835 byte di un catalogo da diciassette app —
+e poi non chiede nient'altro. Nessuna immagine, nessun dettaglio, nessuna seconda richiesta di
+alcun tipo, mentre il log dice che il lab non ha trattenuto niente (`storeRouterStats.failed:
+0`, nessuna connessione lasciata a metà dal dispositivo e nessun nome che non abbia risolto).
+Portare il catalogo da tre app a diciassette ha quadruplicato la risposta senza cambiare altro:
+è questo che rende la variabile rimasta la **forma** del documento, non il suo contenuto.
+
+Che cosa il parser del telefono dice che la pagina deve essere, e che cosa la pagina è
+adesso: è lì che sono finiti gli ultimi tentativi, ognuno un errore di **forma** che un
+documento ben formato non può rivelare.
+
+| Il parser nomina | La pagina era | Adesso |
+|---|---|---|
+| `/StorePage` come radice, `/Panes/Pane`, `/Templates/Template` | una radice `<a:feed>` — la forma del v8 `catalog/hubs` | `<StorePage>` con dentro `<Panes>`, `<Templates>` e il feed |
+| `TEMPLATETYPE`, e da nessuna parte `templateName` / `mimeType` / `application/uix` | `<templateName>` e `<mimeType>application/uix</mimeType>`, copiati dall'archivio v8 | il tipo numerico, in entrambe le grafie che il parser potrebbe aspettarsi |
+| un `TemplateType003` numerico negli asset UI | un template di **nome** `DynamicHub` | `003`, tenuto contro l'insieme che questo telefono stila |
+| `Found %d Store Panes` prima di contare i template | nessun `<Panes>` | un pane per sezione |
+
+L'altra metà era il controllo aggiornamenti nella stessa sequenza: `POST /v8/catalog/updates`
+rispondeva `502` a ogni tentativo, e la cattura mostra il telefono che lo ritenta quattro
+volte di fila mentre lo Store parte. Ora risponde `200`, dichiarando invariato ogni SKU che
+il dispositivo nomina — l'unica risposta che non può essere sbagliata per un lab che non
+serve nessun pacchetto.
+
+Resta non ricavabile dal telefono la forma interna di `<Pane>` e degli altri figli di
+`<StorePage>`. Il parser conserva i percorsi attraverso un contesto scorrevole
+(`XmlPathContext::CommonPush` e `Pop`), quindi dice quali elementi cerca ma non come si
+annidano. La risposta archiviata è l'unico secondo testimone, e una parte la decide: nella
+pagina vera la `<a:entry>` della sezione porta `<editorialItems>` e `<applications>` **dentro
+di sé**, e il GUID di collezione del pane *è* l'id di quella entry. Ogni pagina che questo lab
+ha servito chiedeva al client di accettare un riferimento a contenuto che gli era già stato
+mandato.
+
+`pageFormat` ha quindi tre valori, e il terzo si aggiunge al secondo invece di sostituirlo:
+
+| valore | il documento |
+|---|---|
+| `storePage` | radice `<StorePage>`: panes con un titolo e un riferimento alla loro sezione, gli item nel feed sotto |
+| `panes` | lo stesso documento, ma ogni pane porta anche i suoi `<editorialItems>` e `<applications>` |
+| `atom` | la vecchia radice `<a:feed>`, tenuta perché ogni pagina precedente era quella |
+
+Ciò che si verifica su `panes` è che **aggiunga**: stessa radice, stesso blocco template, stesso
+feed, stessi handle, ogni app nominata esattamente due volte dentro il suo pane e due volte nel
+feed, e ogni voce di catalogo che arriva ancora sulla pagina. Una differenza sul dispositivo è
+quindi attribuibile a dove stanno gli item, e a nient'altro.
+
+#### Il flusso dell'account, reso visibile
+
+Una richiesta verso un host che questo lab non possiede non viene catturata: viene messa in
+tunnel, o su questa rete semplicemente esce. Perciò quello che il telefono fa lì è invisibile. Il
+log DNS è l'unica traccia, ed è quello che ha messo sei nomi in `dns.hijack.names` e in
+`proxy.mitm.hosts`, come diagnostica e non come nomi dello Store.
+
+Cosa dice il log, e cosa l'intercettazione ha poi smentito. Dopo la terza richiesta di pagina con
+`pageFormat: panes` il telefono ha chiesto lo stack account di Live — `login.live.com`,
+`clientconfig.passport.net`, `go.microsoft.com`, `ocsp.digicert.com` — non avendone chiesto
+**nessuno** nelle 173 risoluzioni precedenti. Sembrava il client che passa dalla pagina
+all'accesso. L'apertura successiva, alle 15:48, con quei nomi già intercettati — quindi un
+tentativo **sarebbe** stato catturato — non ne ha chiesto nessuno e non ha catturato niente: quel
+gruppo non era l'accesso dell'hub, e una lettura come sincronizzazione periodica dell'account
+regge. Quella stessa apertura ha però chiesto, nello stesso secondo della pagina e subito dopo,
+`az717532.vo.msecnd.net` e poi `account.nokia.com`, con `ssl-api.bing.com` un minuto prima: un
+sottodominio di CDN Azure, un servizio account Nokia e un host dell'API Bing, nessuno dei quali
+questo lab possiede.
+
+La lista porta quindi due gruppi, e il secondo è ciò che il telefono ha chiesto per ultimo: lo
+stack Live, tenuto perché una occorrenza è pur sempre una occorrenza, e `account.nokia.com` /
+`az717532.vo.msecnd.net` / `ssl-api.bing.com`. Il costo è scritto dove è configurato e ripetuto
+qui: il traffico verso un nome in elenco **termina su questo lab e non può riuscire**, che è un
+modo di fallire **nuovo**, in aggiunta a quello in indagine, e la CA deve essere attendibile sul
+dispositivo per lo stesso motivo. Togliere le righe rimette ogni nome sul percorso vero.
+`npm run rehearse` misura quattro cose per ogni nome in elenco — che risolva verso il lab, che
+raggiunga il proxy, che il certificato sia emesso per quel nome, e che la richiesta venga
+intercettata e catturata — quindi 44 con i nove nomi dello Store, 68 con i quindici di oggi.
+
+Il verdetto si legge solo sul dispositivo, e solo chi lo tiene in mano può leggerlo:
+`0x88675309` è un assert catch-all (`E_JENNY_JENNY_WHO_CAN_I_TURN_TO` scrive 867-5309, il
+numero di telefono della canzone da cui prende il nome), quindi non nomina nessun guasto
+specifico. Se il messaggio sullo schermo è **cambiato** è l'unica cosa che dice se la forma
+del documento ora è giusta.
+
+Per leggere il verdetto si va sul dispositivo: apri lo Store con il lab acceso e guarda cosa
+chiede dopo — `npm run watch` mostra il traffico del device, e
+`captures/session-*/index.jsonl` conserva sia la richiesta sia la pagina che gli è stata
+servita.
+
+Quello che **non** fa, detto chiaramente perché uno Store che si apre non è uno Store che
+installa: serve le superfici di navigazione — home page, pagine hub, liste di applicazioni
+e il dettaglio di un GUID che ha coniato lui. Immagini, licenze e download non sono serviti,
+quindi un'applicazione toccata sul dispositivo arriva a una pagina di dettaglio e non oltre.
 
 ---
 
@@ -440,8 +764,7 @@ src/
     handlers.mjs  store-health + catalog-bridge
     fixtures/     catalogo di esempio per lavorare offline
 tools/
-  selftest.mjs         40 verifiche end-to-end, incluse watch, canary e patch set dell'app
-  app.mjs              driver dell'app: patch set dal lab, build del XAP, deploy USB
+  selftest.mjs         95 verifiche end-to-end, incluse watch e canary
   watch.mjs            mostra solo il traffico che arriva dal dispositivo,
                        compresi i TCP accettati e gli handshake rifiutati
   canary.mjs           ascolta sulle porte che il lab NON serve e segnala se il
@@ -451,7 +774,6 @@ tools/
   analyze-captures.mjs report del protocollo + suggerimenti di config
   make-rootreg.mjs     blob di registro per la CA (con --verify)
   dnsprobe.mjs         query DNS grezza su porta arbitraria
-StorePatcher/           l'app WP8.1 (Store Patcher), vedi docs/superpowers/specs/
 ca/                    generato: CA, leaf, .reg
 captures/              generato: sessioni, body, log DNS
 ```
