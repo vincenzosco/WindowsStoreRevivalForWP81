@@ -38,6 +38,7 @@ namespace Store_Patcher.Services
 
                 if (set.Patches == null) set.Patches = new List<PatchDefinition>();
                 if (set.Lab == null) set.Lab = new LabInfo();
+                if (set.App == null) set.App = new AppInfo();
 
                 return set;
             }

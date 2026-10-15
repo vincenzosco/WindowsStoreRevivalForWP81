@@ -39,6 +39,11 @@
                                FontSize="22" Foreground="{StaticResource PhoneAccentBrush}"/>
                     <TextBlock x:Name="TapHint" Text="tap for certificate and lab details" Margin="0,6,0,0"
                                FontSize="18" Style="{StaticResource PhoneTextSubtleStyle}"/>
+                    <!-- The verdict that matters. The registry check above cannot work on this
+                         build, so whether the phone trusts the CA is answered by using it: a
+                         completed TLS handshake to a name the lab hijacks. -->
+                    <TextBlock x:Name="TrustText" Text="lab trust: not tested yet" Margin="0,8,0,0"
+                               TextWrapping="Wrap" FontSize="19"/>
                 </StackPanel>
             </Border>
 
@@ -59,6 +64,9 @@
 
             <Button x:Name="CheckButton" Content="check device state" Click="OnCheckDevice"/>
             <Button x:Name="ProbeButton" Content="test capabilities" Click="OnProbe"/>
+            <Button x:Name="TrustButton" Content="check lab trust" Click="OnTrust"/>
+            <Button x:Name="RunbookButton" Content="how to install it here" Click="OnRunbook"/>
+            <Button x:Name="CopyButton" Content="copy the import line" IsEnabled="False" Click="OnCopyImportLine"/>
             <Button x:Name="ApplyButton" Content="apply patches" Click="OnApply"/>
             <Button x:Name="RebootButton" Content="reboot phone" IsEnabled="False" Click="OnReboot"/>
 

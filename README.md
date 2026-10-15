@@ -24,9 +24,13 @@ Lumia 625 over USB, and its reports were read back off the phone with ISETool.
 That first real run settled the question the design left open, and the answer is no: on
 this phone build the runtime refuses native calls from app code
 (`NotSupportedException: DllImport cannot be used on user-defined methods`), so **the app
-cannot install the CA itself**. It still detects whether the CA is present and
-byte-identical to the lab's, and it still asks for the reboot. Installing the CA stays on
-the desktop path: `ca/install-root-ca.reg` through WPinternals or CMD Injector.
+cannot install the CA itself**. It cannot look inside the device certificate store either,
+for the same reason: that check reports the refusal instead of a result. What it can still
+do is compare the authorities it has been *given* against the lab CA byte for byte, using
+managed X.509 parsing and no native calls, and ask for the reboot. It also does the half that
+needs no privilege at all: it writes the install file onto the phone and prints the one line
+that imports it from the phone's own console, so the no-PC route is the app's own, and
+`ca/install-root-ca.reg` through WPinternals stays as the desktop route.
 
 Design, decisions and the full measurement are in
 [`docs/superpowers/specs/2026-10-15-wp81-store-revival-design.md`](docs/superpowers/specs/2026-10-15-wp81-store-revival-design.md).
@@ -84,11 +88,20 @@ captures/                generated: sessions, bodies, DNS query log  (gitignored
 
 The root CA has to be trusted on the device before any hijacked TLS name can be
 intercepted; until then the phone connects and is refused during the handshake, which
-produces no capture at all. Two ways to do it:
+produces no capture at all. Two routes, and the phone can now do the first one by itself:
 
-1. **Store Patcher app** — on this build it cannot install the CA (the runtime refuses
-   native calls from app code, measured on device, see Status above); it verifies the CA
-   and asks for the reboot. Build, deploy and read its reports from here:
+1. **Store Patcher app, on the phone** — the app cannot install the CA (the runtime refuses
+   native calls from app code, measured on device, see Status above), and for the same
+   reason it cannot check the CA through the registry either. So it does the half that is
+   left to it, without a cable: it writes the install file onto the phone, prints the exact
+   line to type into the phone's own console (CMD Injector) to import it, and then answers
+   the question that matters by *using* the CA - a completed TLS handshake to a hijacked
+   name, which is what "the CA is trusted" actually means.
+
+   On the phone: `how to install it here` prints the runbook, `copy the import line` puts the
+   long line in the clipboard, `check lab trust` runs the handshake and says which of the
+   three failures it found - DNS, trust, or nothing answering. Build, deploy and read its
+   reports from here:
 
    ```bash
    npm run app:build        # generate the patch set from the lab CA, compile, verify
@@ -96,7 +109,7 @@ produces no capture at all. Two ways to do it:
    ```
 
    ```bash
-   npm run app:report       # pull probe.txt and patches.txt back off the phone
+   npm run app:report       # pull probe.txt, patches.txt, runbook.txt and trust.txt off the phone
    ```
 
    The app runs the capability probe on every launch and saves its report to isolated
@@ -117,9 +130,20 @@ produces no capture at all. Two ways to do it:
 2. **WPinternals** — mount the phone registry and import `ca/install-root-ca.reg`
    (generate it with `npm run make-rootreg`).
 
-`CMD Injector` (`fadilfadz01/CMD.Injector_WP8`) is the documented fallback runner for
-privileged steps: a command prompt on the phone, requiring WP8.1 with bootloader and
-interop unlock, driven by command files placed in a "CMD Injector" folder on the phone.
+`CMD Injector` (`fadilfadz01/CMD.Injector_WP8`) is the on-phone runner for privileged steps:
+an interactive command prompt, requiring WP8.1 with bootloader and interop unlock. You open
+it, press *Inject*, reboot, and type commands into a console on the phone itself.
+
+It does **not** read commands from a folder. An earlier version of this file claimed it was
+"driven by command files placed in a CMD Injector folder on the phone"; the upstream source
+has no such mechanism, and that claim was wrong.
+
+Two things to know before relying on it. Nothing here has measured whether the console can
+reach the app's isolated storage, or whether `reg.exe` exists on WP8.1 at all. And upstream's
+own issue tracker names this model: Lumia 625 on WP8.1 Update 2 (GDR2) is among the cases
+where installing CMD Injector left every user app unable to open, recoverable only by editing
+the registry in mass storage mode or by a hard reset. That is reported upstream, not measured
+here, but it belongs in the decision.
 
 ## Known limits
 

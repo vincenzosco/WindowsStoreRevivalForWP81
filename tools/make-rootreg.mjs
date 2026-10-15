@@ -100,6 +100,24 @@ export function buildRegEntry({ der, hive = 'HKLM', store = 'Root' }) {
   return { text, keyPath, thumbprint, blob };
 }
 
+/**
+ * The exact bytes of the .reg file reg.exe and regedit accept: UTF-16LE with a BOM.
+ *
+ * Exported because the app carries this file verbatim in its patch set. The phone
+ * then writes the bytes generated and verified here instead of formatting a .reg of
+ * its own, which is the same reason the REG_BINARY blob travels pre-built: a second
+ * implementation of the format is a second chance to drift.
+ *
+ * @returns {Buffer}
+ */
+export function buildRegFileBuffer({ der, hive = 'HKLM', store = 'Root' }) {
+  const entry = buildRegEntry({ der, hive, store });
+  return Buffer.concat([
+    Buffer.from([0xff, 0xfe]),
+    Buffer.from(entry.text, 'utf16le'),
+  ]);
+}
+
 async function verify() {
   const der = fs.readFileSync(path.resolve(ROOT, 'ca/ca.der'));
   const ours = buildCertBlob(der);
@@ -165,8 +183,9 @@ if (isMainModule(import.meta.url)) {
 
   const der = fs.readFileSync(derPath);
   const entry = buildRegEntry({ der, hive, store });
+  const file = buildRegFileBuffer({ der, hive, store });
 
-  fs.writeFileSync(out, `\uFEFF${entry.text}`, 'utf16le');
+  fs.writeFileSync(out, file);
 
   console.log(`wrote ${out}`);
   console.log(`  registry key : ${entry.keyPath}`);

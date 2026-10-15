@@ -59,7 +59,12 @@ namespace Store_Patcher.Services
         private const string ProbeKeyPath = "SOFTWARE\\StorePatcher";
         private const string ProbeValueName = "Probe";
 
-        public static ProbeReport Run()
+        /// <param name="runbook">
+        /// The install runbook prepared for this launch. It is passed in rather than
+        /// prepared here so the file is written once per launch, and so the report and the
+        /// screen can never show two different runbooks.
+        /// </param>
+        public static ProbeReport Run(RunbookResult runbook)
         {
             ProbeReport report = new ProbeReport();
 
@@ -90,6 +95,14 @@ namespace Store_Patcher.Services
                 lines.Add("certificate authorities offered: could not be listed - " + ex.Message);
             }
 
+            // The runbook belongs in the report: it is the thing an operator has to act on,
+            // and the report already exists so nobody has to transcribe a phone screen.
+            if (runbook != null)
+            {
+                lines.Add("");
+                lines.AddRange(runbook.Report());
+            }
+
             if (!report.CanPatch)
             {
                 // Measured on the Lumia 625 with this very app: every native call comes
@@ -98,10 +111,14 @@ namespace Store_Patcher.Services
                 // property of the app model, not a mistake in the patch set, and it
                 // changes what the operator should do next.
                 lines.Add("");
-                lines.Add("No route worked, so the app cannot install the CA itself on this phone.");
-                lines.Add("The runtime refuses native calls from app code. Use the desktop path instead:");
-                lines.Add("import ca/install-root-ca.reg with WPinternals, or with CMD Injector,");
-                lines.Add("then reboot and open this app again to confirm the CA is present.");
+                lines.Add("No route worked, so this app cannot install the CA itself: the runtime refuses");
+                lines.Add("native calls from app code, which each line above reports exactly.");
+                lines.Add("The install runbook in this report is the route that needs no PC: the");
+                lines.Add("phone's own console imports the file this app just wrote. The desktop route");
+                lines.Add("still works as well: import ca/install-root-ca.reg with WPinternals.");
+                lines.Add("After either one, reboot and use the trust check - a completed TLS handshake");
+                lines.Add("to a hijacked name is what proves the CA is trusted; a registry read cannot,");
+                lines.Add("and on this build it is refused anyway.");
             }
 
             report.SavedTo = Diagnostics.Save("probe.txt", lines);

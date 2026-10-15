@@ -10,6 +10,7 @@ using System.Collections.ObjectModel;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using Microsoft.Phone;            // Deployment.Current, for calls that come back off the UI thread
 using Microsoft.Phone.Controls;
 
 using Store_Patcher.Models;
@@ -23,6 +24,8 @@ namespace Store_Patcher
         private PatchSet patchSet;
         private PatchDefinition primaryPatch;
         private List<CertificateEntry> certificates = new List<CertificateEntry>();
+        private RunbookResult runbook;
+        private bool runbookPrinted;
 
         public MainPage()
         {
@@ -35,6 +38,10 @@ namespace Store_Patcher
         {
             LoadPatchSet();
             CheckDeviceState();
+
+            // The install file is written before the probe runs, because the probe reports
+            // the runbook and a runbook that does not exist yet cannot be reported.
+            PrepareRunbook();
 
             // Answer the question that decides everything else on every launch: what
             // is this phone willing to let an app do? It is cheap and it cannot go
@@ -145,10 +152,23 @@ namespace Store_Patcher
             }
 
             text.AppendLine();
+            if (runbook != null)
+            {
+                text.AppendLine("install file: " + (runbook.Actionable
+                    ? runbook.FileName + " ready on the phone, " + runbook.Bytes + " bytes, SHA-1 " + runbook.Sha1
+                    : "not ready - " + (runbook.Error ?? "no reason given")));
+                text.AppendLine();
+            }
+
             text.AppendLine("This build cannot write the registry or the certificate store: the");
             text.AppendLine("runtime refuses native calls from app code, which the capability probe");
-            text.AppendLine("reports with the exact error. Import ca/install-root-ca.reg with");
-            text.AppendLine("WPinternals or CMD Injector, reboot, then check this screen again.");
+            text.AppendLine("reports with the exact error - and for the same reason it cannot read the");
+            text.AppendLine("store to check whether the CA is there. What it can do is put the install");
+            text.AppendLine("file on the phone and print the line that imports it: press \"how to");
+            text.AppendLine("install it here\".");
+            text.AppendLine();
+            text.AppendLine("To find out whether the CA is trusted, press \"check lab trust\": a completed");
+            text.AppendLine("TLS handshake to a hijacked name is the proof, and it needs no capability.");
             text.AppendLine();
             text.AppendLine("Select an authority below to see the DNS address it belongs to and the");
             text.AppendLine("names that address is meant to answer for.");
@@ -166,7 +186,7 @@ namespace Store_Patcher
         {
             log.Add("--- capability probe ---");
 
-            ProbeReport report = CapabilityProbe.Run();
+            ProbeReport report = CapabilityProbe.Run(runbook);
             foreach (ProbeLine line in report.Lines)
             {
                 log.Add(line.Line);
@@ -175,6 +195,145 @@ namespace Store_Patcher
             log.Add(report.CanPatch
                 ? "at least one route for installing the CA works on this phone"
                 : "no route worked: fall back to ca/install-root-ca.reg (WPinternals or CMD Injector)");
+        }
+
+        /// <summary>
+        /// Write the install file onto the phone and keep the lines the console needs.
+        ///
+        /// This is the half of the job that is left to this app: it cannot write the
+        /// certificate store, but it can prepare the install file and say exactly what to
+        /// type on the phone to import it - no cable, no PC.
+        /// </summary>
+        private void PrepareRunbook()
+        {
+            runbook = null;
+            runbookPrinted = false;
+            CopyButton.IsEnabled = false;
+
+            if (patchSet == null)
+            {
+                RunbookButton.IsEnabled = false;
+                return;
+            }
+
+            runbook = InstallRunbook.Prepare(patchSet);
+
+            if (runbook.Actionable)
+            {
+                log.Add("install runbook ready: " + runbook.FileName + " (" + runbook.Bytes
+                    + " bytes, SHA-1 " + runbook.Sha1 + ") - press \"how to install it here\"");
+                CopyButton.IsEnabled = true;
+            }
+            else
+            {
+                log.Add("FAIL  install runbook not ready: " + (runbook.Error ?? "no reason given"));
+            }
+
+            log.Add("saved: " + Diagnostics.Save("runbook.txt", runbook.Report()));
+        }
+
+        /// <summary>
+        /// Show the runbook. It goes into the log rather than into a panel of its own: the
+        /// log is the surface on this screen that already scrolls.
+        /// </summary>
+        private void OnRunbook(object sender, RoutedEventArgs e)
+        {
+            if (runbook == null)
+            {
+                log.Add("no runbook: this build carries no patch set to build one from");
+                return;
+            }
+
+            if (runbookPrinted)
+            {
+                log.Add("--- the runbook is already above, and saved in runbook.txt ---");
+                return;
+            }
+
+            runbookPrinted = true;
+            log.Add("--- install runbook ---");
+            foreach (string line in runbook.Text.Split(new char[] { '\r', '\n' }, StringSplitOptions.None))
+            {
+                log.Add(line);
+            }
+        }
+
+        /// <summary>
+        /// Copy the line that is long enough to be mistyped. The clipboard API may not be
+        /// on this build: if it is not, that is reported instead of pretended.
+        /// </summary>
+        private void OnCopyImportLine(object sender, RoutedEventArgs e)
+        {
+            if (runbook == null || string.IsNullOrEmpty(runbook.CopyLine))
+            {
+                log.Add("nothing to copy: the runbook is not ready");
+                return;
+            }
+
+            try
+            {
+                Clipboard.SetText(runbook.CopyLine);
+                log.Add("copied to the clipboard: " + runbook.CopyLine);
+            }
+            catch (Exception ex)
+            {
+                log.Add("FAIL  could not copy to the clipboard: " + ex.GetType().Name + ": " + ex.Message);
+                log.Add("type it instead: " + runbook.CopyLine);
+            }
+        }
+
+        /// <summary>
+        /// Ask the phone, over TLS, whether it trusts the lab.
+        ///
+        /// This is the check the rest of the screen leans on: the registry read above cannot
+        /// work on this build, so "is the CA installed" has to be answered by using it.
+        /// </summary>
+        private void OnTrust(object sender, RoutedEventArgs e)
+        {
+            List<string> hosts = LabTrustProbe.Hosts(patchSet);
+            if (hosts.Count == 0)
+            {
+                TrustText.Text = "lab trust: nothing to test - this patch set carries no host names";
+                log.Add("FAIL  the patch set carries no host names, so there is nothing to test");
+                return;
+            }
+
+            log.Add("--- lab trust over TLS, " + hosts.Count + " name(s) ---");
+            log.Add("the phone must be on the lab's network, with Wi-Fi DNS pointing at the lab");
+
+            TrustButton.IsEnabled = false;
+            TrustText.Text = "lab trust: checking " + hosts.Count + " name(s)...";
+
+            LabTrustProbe.Check(
+                hosts,
+                delegate(TrustResult result) { OnUi(delegate { log.Add(result.Line); }); },
+                delegate(List<TrustResult> results) { OnUi(delegate { FinishTrust(results); }); });
+        }
+
+        /// <summary>
+        /// The probe answers from a worker thread, so everything that touches the screen
+        /// goes through the dispatcher: touching it directly is a cross-thread failure.
+        /// </summary>
+        private void OnUi(Action action)
+        {
+            Deployment.Current.Dispatcher.BeginInvoke(action);
+        }
+
+        private void FinishTrust(List<TrustResult> results)
+        {
+            string address = patchSet == null || patchSet.Lab == null ? null : patchSet.Lab.AdvertiseIp;
+            string summary = LabTrustProbe.Summarize(results, address);
+
+            TrustText.Text = "lab trust: " + summary;
+            log.Add(summary);
+
+            List<string> lines = new List<string>();
+            lines.Add("lab address in this build: " + (string.IsNullOrEmpty(address) ? "not set" : address));
+            foreach (TrustResult result in results) lines.Add(result.Line);
+            lines.Add(summary);
+            log.Add("saved: " + Diagnostics.Save("trust.txt", lines));
+
+            TrustButton.IsEnabled = true;
         }
 
         private void OnApply(object sender, RoutedEventArgs e)
@@ -260,7 +419,8 @@ namespace Store_Patcher
 
             string detail;
             bool present = PatchEngine.IsAlreadyPresent(primaryPatch, out detail);
-            StateText.Text = "root CA on device: " + (present ? "present" : "not present") + "  (" + detail + ")";
+            StateText.Text = "root CA in the device store: " + (present ? "present" : "not present")
+                + "  (" + detail + ")";
         }
     }
 }

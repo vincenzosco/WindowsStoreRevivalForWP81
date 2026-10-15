@@ -29,7 +29,7 @@ import { inflateRawSync } from 'node:zlib';
 import { loadConfig } from '../src/config.mjs';
 import { createLogger } from '../src/log.mjs';
 import { isMainModule, prettyPath } from '../src/paths.mjs';
-import { buildCertBlob, sha1Thumbprint } from './make-rootreg.mjs';
+import { buildCertBlob, sha1Thumbprint, buildRegFileBuffer } from './make-rootreg.mjs';
 
 const execFileAsync = promisify(execFile);
 const log = createLogger('app');
@@ -47,9 +47,14 @@ const XAP_PATH = path.join(PROJECT_DIR, 'Bin', CONFIGURATION, XAP_NAME);
 export const CAPABILITY = 'ID_CAP_INTEROPSERVICES';
 
 /** Reboot is required for the certificate store to be read at boot. */
-const PATCH_SCHEMA_VERSION = 1;
 
-// ---------------------------------------------------------------- patch set
+// 2 added the .reg file and the app's product id: the app no longer formats either
+// one from scratch, it writes the bytes the desktop side generated. A v1 patch set
+// still loads - the runbook then says what is missing instead of guessing.
+const PATCH_SCHEMA_VERSION = 2;
+
+/** File name the app writes into its isolated storage and the console imports. */
+export const REG_FILE_NAME = 'install-root-ca.reg';
 
 /**
  * Build the patch set that the app applies on the device.
@@ -57,12 +62,24 @@ const PATCH_SCHEMA_VERSION = 1;
  * Pure on purpose: the self-test calls it with its own throwaway CA, so the
  * generator is verified without touching the real `patches.json`.
  *
- * @param {{ caDer: Buffer, caPem?: string, advertiseIp?: string, generatedAt?: string }} options
+ * @param {{ caDer: Buffer, caPem?: string, advertiseIp?: string, hosts?: string[],
+ *          productId?: string, generatedAt?: string }} options
  * @returns {object} the patch set, ready to be serialised
  */
-export function buildPatchSet({ caDer, caPem = null, advertiseIp = null, hosts = [], generatedAt = new Date().toISOString() }) {
+export function buildPatchSet({
+  caDer,
+  caPem = null,
+  advertiseIp = null,
+  hosts = [],
+  productId = null,
+  generatedAt = new Date().toISOString(),
+}) {
   const thumbprint = sha1Thumbprint(caDer);
   const blob = buildCertBlob(caDer);
+
+  // The whole .reg file, not just its blob: the phone hands this file to the on-phone
+  // console, and it can only do that with the bytes generated and verified here.
+  const regFile = buildRegFileBuffer({ der: caDer });
 
   return {
     schemaVersion: PATCH_SCHEMA_VERSION,
@@ -70,6 +87,10 @@ export function buildPatchSet({ caDer, caPem = null, advertiseIp = null, hosts =
     // `hosts` is what the lab hijacks: the names the device must ask *this* DNS for.
     // It travels with the certificate because the two are only useful together.
     lab: { advertiseIp, hosts },
+    // Facts about the package that the app cannot read about itself at runtime. The
+    // product id decides where its isolated storage lives, and the runbook it prints
+    // is composed from this instead of guessed.
+    app: { productId },
     patches: [
       {
         id: 'lab-root-ca',
@@ -82,6 +103,10 @@ export function buildPatchSet({ caDer, caPem = null, advertiseIp = null, hosts =
         // re-implement the layout.
         blobBase64: blob.toString('base64'),
         derBase64: caDer.toString('base64'),
+        // The install file for the on-phone route: written verbatim into isolated
+        // storage, then imported from the phone's own console.
+        regFileName: REG_FILE_NAME,
+        regFileBase64: regFile.toString('base64'),
         requiresReboot: true,
         description: 'Install the lab root CA as a trusted root, so intercepted TLS names are accepted',
       },
@@ -108,7 +133,7 @@ export async function generatePatches({ configPath = null, out = PATCH_FILE } = 
   const caPem = fs.existsSync(pemPath) ? fs.readFileSync(pemPath, 'utf8') : null;
   const advertiseIp = config.__advertiseIp || config.network?.advertiseIp || null;
   const hosts = config.dns?.hijack?.names || [];
-  const patchSet = buildPatchSet({ caDer, caPem, advertiseIp, hosts });
+  const patchSet = buildPatchSet({ caDer, caPem, advertiseIp, hosts, productId: productId() });
 
   fs.writeFileSync(out, `${JSON.stringify(patchSet, null, 2)}\n`);
   return { patchSet, file: out };
@@ -251,9 +276,10 @@ export async function buildApp({ msbuild = null, patchFile = PATCH_FILE } = {}) 
     name: 'the patch set is embedded and matches the generated one',
     ok: Boolean(embeddedPatch)
       && embeddedPatch.thumbprint === expected.thumbprint
-      && embeddedPatch.blobBase64 === expected.blobBase64,
+      && embeddedPatch.blobBase64 === expected.blobBase64
+      && embeddedPatch.regFileBase64 === expected.regFileBase64,
     detail: embeddedPatch
-      ? `thumbprint ${embeddedPatch.thumbprint}`
+      ? `thumbprint ${embeddedPatch.thumbprint}, install file ${Buffer.from(embeddedPatch.regFileBase64 || '', 'base64').length} bytes`
       : 'patches.json missing from the XAP (is it listed as Content in the .csproj?)',
   });
 
@@ -560,7 +586,10 @@ async function status() {
   if (fs.existsSync(PATCH_FILE)) {
     const set = readPatchSet();
     const patch = set.patches?.[0];
-    log.info(`patch set: ${set.patches?.length ?? 0} patch(es), thumbprint ${patch?.thumbprint || 'none'}`);
+    log.info(`patch set: schema ${set.schemaVersion ?? '?'}, ${set.patches?.length ?? 0} patch(es), thumbprint ${patch?.thumbprint || 'none'}`);
+    log.info(`install file for the on-phone runbook: ${patch?.regFileName || 'none'}`
+      + ` (${patch?.regFileBase64 ? Buffer.from(patch.regFileBase64, 'base64').length : 0} bytes),`
+      + ` product id ${set.app?.productId || 'not recorded'}`);
   }
   if (fs.existsSync(XAP_PATH)) {
     log.info(`XAP: ${prettyPath(XAP_PATH)} (${fs.statSync(XAP_PATH).size} bytes)`);

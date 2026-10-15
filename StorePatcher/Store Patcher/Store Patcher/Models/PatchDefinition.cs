@@ -21,8 +21,27 @@ namespace Store_Patcher.Models
         [DataMember(Name = "lab")]
         public LabInfo Lab { get; set; }
 
+        /// <summary>Facts about this app package that only the build side can read.</summary>
+        [DataMember(Name = "app")]
+        public AppInfo App { get; set; }
+
         [DataMember(Name = "patches")]
         public List<PatchDefinition> Patches { get; set; }
+    }
+
+    /// <summary>
+    /// What the generator knows about the package it is building for.
+    ///
+    /// The product id decides where an app's isolated storage lives on the phone, and
+    /// there is no API that returns it at runtime. It travels here so the install
+    /// runbook prints the real path instead of an invented one - a wrong path is worse
+    /// than no path, because it looks actionable.
+    /// </summary>
+    [DataContract]
+    public sealed class AppInfo
+    {
+        [DataMember(Name = "productId")]
+        public string ProductId { get; set; }
     }
 
     [DataContract]
@@ -77,6 +96,19 @@ namespace Store_Patcher.Models
         /// <summary>The certificate itself, DER, base64 - used by the certificate store API route.</summary>
         [DataMember(Name = "derBase64")]
         public string DerBase64 { get; set; }
+
+        /// <summary>File name of the install file the runbook writes, as the generator named it.</summary>
+        [DataMember(Name = "regFileName")]
+        public string RegFileName { get; set; }
+
+        /// <summary>
+        /// The whole .reg install file, exactly as the desktop side writes it: UTF-16LE
+        /// with a BOM. It is carried verbatim for the same reason the blob is - the
+        /// phone imports the file that was generated and verified on the PC, so nothing
+        /// about the format can drift on the device. Empty in a schema 1 patch set.
+        /// </summary>
+        [DataMember(Name = "regFileBase64")]
+        public string RegFileBase64 { get; set; }
 
         [DataMember(Name = "requiresReboot")]
         public bool RequiresReboot { get; set; }

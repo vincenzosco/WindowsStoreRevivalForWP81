@@ -130,9 +130,11 @@ namespace Store_Patcher.Services
 
             if (IsLabCertificate)
             {
-                text.AppendLine("This is the authority the lab is serving right now. Import");
-                text.AppendLine("ca/install-root-ca.reg with WPinternals, reboot, then check");
-                text.AppendLine("the status line above.");
+                text.AppendLine("This is the authority the lab is serving right now. On the phone,");
+                text.AppendLine("press \"how to install it here\" for the exact line to type into the");
+                text.AppendLine("phone's own console; from the PC, import ca/install-root-ca.reg with");
+                text.AppendLine("WPinternals. Either way, reboot, then press \"check lab trust\": the");
+                text.AppendLine("TLS handshake is what proves this authority is trusted.");
             }
             else if (IdenticalToLab)
             {

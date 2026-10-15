@@ -33,8 +33,8 @@ import { describeDirectHandshakeFailure } from '../src/proxy.mjs';
 import { StoreRouter } from '../src/store/router.mjs';
 import { buildHandlers } from '../src/store/handlers.mjs';
 import { query } from './dnsprobe.mjs';
-import { buildPatchSet, readZipEntries, zipEntry, readCertificateDer, CAPABILITY } from './app.mjs';
-import { buildCertBlob } from './make-rootreg.mjs';
+import { buildPatchSet, readZipEntries, zipEntry, readCertificateDer, CAPABILITY, productId, REG_FILE_NAME } from './app.mjs';
+import { buildCertBlob, buildRegFileBuffer } from './make-rootreg.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -686,6 +686,7 @@ async function main() {
       caDer,
       advertiseIp: FAKE_LAN_IP,
       hosts: testHosts,
+      productId: '{00000000-0000-0000-0000-0000000000aa}',
       generatedAt: '2026-10-15T00:00:00.000Z',
     });
     const patch = patchSet.patches[0];
@@ -710,6 +711,49 @@ async function main() {
         && patchSet.lab.hosts.length === testHosts.length
         && patchSet.lab.hosts[0] === testHosts[0],
       `ip=${patchSet.lab.advertiseIp} hosts=${JSON.stringify(patchSet.lab.hosts)}`);
+
+    // The phone cannot write the certificate store itself (measured: the runtime
+    // refuses native calls from app code), so its job is to hand the phone's own
+    // console a file to import. It must hand over the file generated here, byte for
+    // byte: a .reg formatted on the device would be a second implementation of the
+    // format, and therefore a second chance to drift from what was verified.
+    const expectedRegFile = buildRegFileBuffer({ der: caDer });
+    const carriedRegFile = Buffer.from(patch.regFileBase64 || '', 'base64');
+    check('app: the patch set carries the .reg install file byte for byte',
+      carriedRegFile.equals(expectedRegFile) && carriedRegFile.length > 0,
+      `carried=${carriedRegFile.length} bytes, expected=${expectedRegFile.length} bytes`);
+
+    // Two independent readings of the same file: it has to be the encoding reg.exe
+    // accepts at all (UTF-16LE with a BOM), and its hex payload has to decode back
+    // to the blob the desktop side proved against Windows.
+    const regText = carriedRegFile.toString('utf16le', 2);
+    const keyLine = `[${patch.hive}\\SOFTWARE\\Microsoft\\SystemCertificates\\${patch.store}\\Certificates\\${expectedThumbprint}]`;
+    check('app: the .reg is UTF-16LE with a BOM and names the registry key to create',
+      carriedRegFile[0] === 0xff && carriedRegFile[1] === 0xfe
+        && regText.startsWith('Windows Registry Editor Version 5.00')
+        && regText.includes(keyLine),
+      `first bytes=${carriedRegFile.subarray(0, 2).toString('hex')}, key present=${regText.includes(keyLine)}`);
+
+    const decodedBlob = Buffer.from(
+      regText.slice(regText.indexOf('"Blob"=hex:') + 11).replace(/[^0-9a-fA-F]/g, ''),
+      'hex',
+    );
+    check('app: the .reg payload decodes to the blob the desktop verified',
+      decodedBlob.equals(buildCertBlob(caDer)),
+      `decoded=${decodedBlob.length} bytes, verified=${buildCertBlob(caDer).length} bytes`);
+
+    // The runbook prints the path this app's isolated storage lives at, and the app
+    // has no API for it on the device. It comes from the manifest at generation time,
+    // so a wrong value here would send the operator to a path that does not exist.
+    check('app: the .reg file name travels with the patch set',
+      patch.regFileName === REG_FILE_NAME,
+      `regFileName=${patch.regFileName}`);
+    check('app: the product id for the runbook is read from the app manifest',
+      /^\{[0-9a-fA-F-]{36}\}$/.test(productId()),
+      `productId=${productId()}`);
+    check('app: the patch set records the product id it was generated for',
+      patchSet.app.productId === '{00000000-0000-0000-0000-0000000000aa}',
+      `app.productId=${patchSet.app.productId}`);
 
     // The picker on the phone compares authorities by their bytes, and the operator
     // compares them by thumbprint. Both readings have to agree with what the desktop

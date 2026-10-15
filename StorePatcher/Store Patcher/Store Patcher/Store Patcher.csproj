@@ -103,6 +103,8 @@
     <Compile Include="Services\CertificateInstaller.cs" />
     <Compile Include="Services\CertificateInventory.cs" />
     <Compile Include="Services\Diagnostics.cs" />
+    <Compile Include="Services\InstallRunbook.cs" />
+    <Compile Include="Services\LabTrustProbe.cs" />
     <Compile Include="Services\PatchEngine.cs" />
     <Compile Include="Services\PatchSetLoader.cs" />
     <Compile Include="Services\RebootService.cs" />

@@ -167,11 +167,23 @@ Local toolchain, verified present on this machine:
 
 Fallback channels, documented but not automated because they cannot be tested here:
 WPinternals registry mount, and CMD Injector (`fadilfadz01/CMD.Injector_WP8`), which
-needs WP8.1 plus bootloader and interop unlock — the state this phone is already in. Its
-command files live in a "CMD Injector" folder on the phone's internal storage.
+needs WP8.1 plus bootloader and interop unlock — the state this phone is already in.
+
+Correction (2026-10-15, read from the upstream source): this section used to say that CMD
+Injector is driven by "command files placed in a CMD Injector folder on the phone". It is
+not. It is an interactive command prompt: you press *Inject*, reboot, and type commands into
+a console on the phone (plus a `BootConfig` surface for boot-time execution). No folder is
+watched and no command file is read. One further fact, reported rather than measured here:
+upstream's issue tracker names this model — Lumia 625 on WP8.1 Update 2 (GDR2) — among the
+cases where installing CMD Injector left every user app unable to open, recoverable only by
+editing the registry in mass storage mode or by a hard reset.
 
 ## Roadmap
 
+- **v2 — native component or full-trust deployment**: the only route to an install that needs
+  no console and no typing. Blocked today by the missing WP8.1 ARM compiler (`npm run
+  app:toolchain` measures it), and it is the experiment that would also answer whether the
+  refusal depends on the capability rather than being unconditional.
 - **v2 — `url-map`**: rewrite Store endpoint URLs to the lab address, so the device finds
   the lab even where DNS redirection cannot reach (a cached or hardcoded CDN address is
   the standing suspect in the lab notes). Design provision made now: the patch schema is
@@ -181,13 +193,25 @@ command files live in a "CMD Injector" folder on the phone's internal storage.
 
 ## Testing
 
-What can be verified on this machine, and is:
+What can be verified on this machine, and is (50/50 in `npm run selftest`, plus the
+artifact checks below):
 
 - generator: `patches.json` thumbprint equals `sha1(ca.der)`, and `blobBase64` decodes to
   exactly `buildCertBlob(ca.der)` — asserted in the self-test suite;
+- generator, the install file: the carried `regFileBase64` equals
+  `buildRegFileBuffer(ca.der)` byte for byte, begins with a UTF-16LE BOM, names the registry
+  key to create, and its hex payload decodes back to `buildCertBlob(ca.der)`. The payload is
+  decoded by the test rather than compared as text, so a formatter that drifted would fail
+  instead of agreeing with itself;
+- generator, the runbook's path: `app.productId` in the patch set is the `ProductID` from
+  `Properties/WMAppManifest.xml`, read through the same function the build uses;
 - app: MSBuild compiles the XAP (exit status checked), and the built XAP is inspected for
-  the embedded patch set and the interop capability;
-- no test asserts on-device behaviour. Those results come back from the probe screen.
+  the embedded patch set, the install file and the interop capability;
+- artifact, checked by hand against the real files after a build: `patches.json` and the
+  `patches.json` inside the XAP both carry schema 2, the product id equal to the manifest's,
+  and a `.reg` identical to the file generated for `ca/ca.der`;
+- no test asserts on-device behaviour. Those results come back from the phone: the probe
+  screen, `runbook.txt`, `trust.txt`, and the console's own output.
 
 ## Measured on the device (2026-10-15, Lumia 625, RM-941)
 
@@ -272,7 +296,7 @@ exists. `node tools/app.mjs push-ca <file> --dns <address>` places a certificate
 companion file on the phone, and verifies the upload with `dir` rather than trusting the
 `rs` exit status.
 
-Verified: the app compiles with `X509Certificate` on this platform, the self-test is 44/44
+Verified: the app compiles with `X509Certificate` on this platform, the self-test passes
 (including that a pushed CA reads identically from PEM and DER, that it carries the same
 thumbprint as the patch set, and that a file which is not a certificate is refused rather
 than uploaded), and the XAP was built and deployed to the Lumia.
@@ -283,11 +307,77 @@ the phone is locked. The upload and the snapshot failed identically within secon
 other, which is what points at device state rather than at the upload command. The evidence
 is waiting on the phone: the app writes the authority list into `probe.txt` on every launch.
 
+## Decision (2026-10-15): the phone does it, the app prepares and verifies
+
+Constraint given by the operator: **everything on the phone, no PC**. That is a harder
+constraint than the one this design was written under, and it removes the route the design
+had been relying on.
+
+| Route | Verdict |
+| --- | --- |
+| The app writes the registry itself | Excluded by measurement: the runtime refuses native calls from app code. |
+| PC in mass storage (`reg load`/`reg add` on the mounted hive) | Excluded by the constraint: that route *is* the PC. |
+| Our own native component or a full-trust deployment | The only route to a fully automatic install, and still blocked: the WP8.1 ARM compiler is not installed here. Parked as v2, not promised. |
+| The phone's own console (CMD Injector) | **Chosen.** It is the only privileged executor that exists on the phone today. |
+
+So the app's job changes, and it is not a consolation prize: it carries the install file,
+writes it where the phone can reach it, prints the exact line that imports it, and answers
+the only question that matters afterwards - is this CA trusted - by *using* it.
+
+### What the app does now
+
+1. **The patch set carries the whole `.reg` file** (`regFileBase64`, `regFileName`, schema 2),
+   generated by `buildRegFileBuffer()` in `tools/make-rootreg.mjs` - UTF-16LE with a BOM,
+   the form regedit writes. The phone writes those bytes; it does not format a `.reg` of its
+   own, for the same reason it does not re-implement the blob: a second implementation of a
+   verified format is a second chance to drift.
+2. **It also carries the app's product id** (`app.productId`), read from `WMAppManifest.xml`
+   at generation time. There is no runtime API for it, and the install path is composed from
+   it. An invented path would be worse than no path, because it looks actionable.
+3. **`InstallRunbook` writes the file and verifies it**: written into isolated storage, then
+   read back and compared byte for byte before it is called ready, plus a SHA-1 so a copy can
+   be compared afterwards.
+4. **The runbook says exactly what to type**, and starts with the check that settles the one
+   assumption left:
+   ```
+   dir /s /b C:\Data\Users\DefApps\APPDATA\install-root-ca.reg
+   reg import "<the path it printed>"
+   ```
+   Step 1 prints nothing when the console cannot read this app's isolated storage - and then
+   this route is closed on this phone and the screen says so, instead of sending the operator
+   down a path that cannot work.
+
+### Verification changes hands
+
+Reading the registry was how the app checked the CA, and that is refused on this build for
+the same reason writing it is. The replacement asks a better question: **does a TLS
+handshake to a name the lab hijacks complete?** That needs no capability, and it proves what
+the registry check only implied - that this phone accepts the lab's certificate for that
+name. A 502 from the lab counts as success: it is a completed handshake, and that status is
+the lab's deliberate answer for an endpoint it does not emulate yet.
+
+Failures are split into the causes that need different fixes, because "it does not work"
+sends people to the wrong one: the name does not resolve (**Wi-Fi DNS**), the certificate was
+refused (**the root CA is missing**), or nothing answered (**the lab is not running**).
+
+### The one assumption left, and how it is settled
+
+Nothing here has measured whether CMD Injector's console can read this app's isolated
+storage, or whether `reg.exe` exists on WP8.1 at all. Both are answerable on the phone in
+about two minutes, with the console that is already there - `dir`, `reg /?`, and whether a
+paste works - and the runbook's step 1 is the same check in usable form. If all three come
+back no, **no phone-only route exists on this device today**, and that is the honest answer
+rather than a runbook that cannot work.
+
 ## Risks
 
 | Risk | Mitigation |
 | --- | --- |
 | An interop app cannot write HKLM on this build | **Confirmed on the device** (see above): the app reports it instead of pretending, and the `.reg` fallback takes over. |
+| The console cannot read the app's isolated storage | Not assumed: runbook step 1 is the check, and the screen states that this route is closed when it prints nothing. Fallbacks named on the screen: the desktop `.reg` import, or a native component once a compiler exists. |
+| `reg.exe` does not exist on WP8.1 | Not assumed. The runbook says to stop rather than fall back to typing the blob by hand, and the file form (UTF-16LE + BOM) is asserted in the self-test so the encoding is not part of the doubt. |
+| CMD Injector damages this phone model | Upstream's issue tracker names the Lumia 625 on WP8.1 Update 2 among the cases where every user app stopped opening. It is stated in the runbook on the screen, before the operator gets there. |
+| The trust check passes on a cached TLS session | The check is meant to be run after the reboot, when the cache is empty. Stated in the code, not hidden. |
 | An interop app cannot reboot the phone | The screen still says "reboot required" with manual instructions; a reboot is not silently skipped or faked. |
 | Patches the app applies are lost on reboot | Re-running the app is idempotent, and `already-present` proves persistence. |
 | Certificate pinning in the Store app defeats MITM | Out of scope here; already listed as a known limit in the lab document. |
