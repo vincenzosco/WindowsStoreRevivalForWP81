@@ -6,7 +6,7 @@ experience again, after Microsoft shut the original backend down on 2019-12-16.
 | Project | Path | What it does |
 | --- | --- | --- |
 | **Lab** | `src/`, `tools/`, `config.json` | Hijacks the Store host names by DNS and intercepts only that traffic, so the real Store protocol can be captured and later mapped onto a live catalog. |
-| **Store Patcher** | `StorePatcher/Store Patcher/` | Windows Phone 8.1 app that patches the phone itself: installs the lab root CA as a trusted root, then asks for the reboot it needs. |
+| **Store Patcher** | `StorePatcher/Store Patcher/` | Windows Phone 8.1 app that patches the phone itself: installs the lab root CA as a trusted root, then asks for the reboot it needs. Also the only place that can answer what an interop app is allowed to do on this build, through its capability probe. |
 
 The app and the lab are one system: the lab generates the patch set from its own
 certificate, so the phone is always patched with the CA the lab is actually serving.
@@ -18,8 +18,11 @@ the Zune catalog hosts no longer resolve — so today an intercepted Store reque
 deliberate `502`, and that `502` is the list of endpoints to emulate. The translation
 layer is not written yet.
 
-The on-device patcher is in progress; its design and the single unverified assumption it
-rests on are written down in
+The on-device patcher **compiles, and its built artifact is checked** (the XAP must carry
+the patch set and the interop capability, or the build fails). What is deliberately *not*
+claimed is on-device behaviour: whether an interop app on this phone build can write to
+`HKLM` and restart it is answered by the app's own capability probe, not by a desktop
+test. Design, decisions and that risk are in
 [`docs/superpowers/specs/2026-10-15-wp81-store-revival-design.md`](docs/superpowers/specs/2026-10-15-wp81-store-revival-design.md).
 
 ## Quick start (lab)
@@ -66,6 +69,10 @@ captures/                generated: sessions, bodies, DNS query log  (gitignored
 | `npm run make-rootreg` | Generate `ca/install-root-ca.reg` for the phone registry. |
 | `npm run verify-rootreg` | Prove the generated blob is byte-identical to what Windows writes. |
 | `npm run start:wp80` | TLS 1.0 variant, for Windows Phone 8.0 devices. |
+| `npm run app:status` | What is present: app project, patch set, XAP, MSBuild, deployment tool. |
+| `npm run app:patch` | Generate the app's patch set from the lab CA. |
+| `npm run app:build` | Compile the XAP and verify the patch set and capability inside it. |
+| `npm run app:deploy` | Install the XAP on the phone over USB (`--dry-run` to just print). |
 
 ## The phone side
 
@@ -73,7 +80,17 @@ The root CA has to be trusted on the device before any hijacked TLS name can be
 intercepted; until then the phone connects and is refused during the handshake, which
 produces no capture at all. Two ways to do it:
 
-1. **Store Patcher app** (in progress) — installs the CA and asks for the reboot.
+1. **Store Patcher app** — installs the CA and asks for the reboot. Build and deploy it
+   from here:
+
+   ```bash
+   npm run app:build        # generate the patch set from the lab CA, compile, verify
+   npm run app:deploy       # phone attached over USB, developer unlocked
+   ```
+
+   On the phone, run **test capabilities** first: it reports, with evidence, whether the
+   registry and certificate routes work on that build, and saves the report to isolated
+   storage.
 2. **WPinternals** — mount the phone registry and import `ca/install-root-ca.reg`
    (generate it with `npm run make-rootreg`).
 

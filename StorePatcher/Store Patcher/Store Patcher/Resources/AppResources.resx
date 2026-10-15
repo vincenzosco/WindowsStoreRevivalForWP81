@@ -122,16 +122,16 @@
     <comment>Controls the FlowDirection for all elements in the RootFrame. Set to the traditional direction of this resource file's language</comment>
   </data>
   <data name="ResourceLanguage" xml:space="preserve">
-    <value>it-IT</value>
+    <value>en-US</value>
     <comment>Controls the Language and ensures that the font for all elements in the RootFrame aligns with the app's language. Set to the language code of this resource file's language.</comment>
   </data>
   <data name="ApplicationTitle" xml:space="preserve">
-    <value>APPLICAZIONE</value>
+    <value>STORE PATCHER</value>
   </data>
   <data name="AppBarButtonText" xml:space="preserve">
-    <value>aggiungi</value>
+    <value>add</value>
   </data>
   <data name="AppBarMenuItemText" xml:space="preserve">
-    <value>Voce di menu</value>
+    <value>Menu item</value>
   </data>
 </root>

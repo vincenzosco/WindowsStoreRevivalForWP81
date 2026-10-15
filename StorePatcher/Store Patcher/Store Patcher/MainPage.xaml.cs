@@ -1,41 +1,144 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net;
+// The app's only screen and its wiring.
+//
+// The order the buttons are in is the order that makes sense on a device: look,
+// then probe, then patch, then reboot. Nothing here decides anything on its own -
+// every step reports what it found, including "this does not work on this phone".
+
+using System;
+using System.Collections.ObjectModel;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Navigation;
 using Microsoft.Phone.Controls;
-using Microsoft.Phone.Shell;
-using Store_Patcher.Resources;
+
+using Store_Patcher.Models;
+using Store_Patcher.Services;
 
 namespace Store_Patcher
 {
     public partial class MainPage : PhoneApplicationPage
     {
-        // Costruttore
+        private readonly ObservableCollection<string> log = new ObservableCollection<string>();
+        private PatchSet patchSet;
+        private PatchDefinition primaryPatch;
+
         public MainPage()
         {
             InitializeComponent();
-
-            // Codice di esempio per localizzare la ApplicationBar
-            //BuildLocalizedApplicationBar();
+            LogList.ItemsSource = log;
+            Loaded += OnLoaded;
         }
 
-        // Codice di esempio per la realizzazione di una ApplicationBar localizzata
-        //private void BuildLocalizedApplicationBar()
-        //{
-        //    // Imposta la barra delle applicazioni della pagina su una nuova istanza di ApplicationBar
-        //    ApplicationBar = nuova ApplicationBar();
+        private void OnLoaded(object sender, RoutedEventArgs e)
+        {
+            LoadPatchSet();
+            CheckDeviceState();
+        }
 
-        //    // Crea un nuovo pulsante e imposta il valore del testo sulla stringa localizzata da AppResources.
-        //    ApplicationBarIconButton appBarButton = new ApplicationBarIconButton(new Uri("/Assets/AppBar/appbar.add.rest.png", UriKind.Relative));
-        //    appBarButton.Text = AppResources.AppBarButtonText;
-        //    ApplicationBar.Buttons.Add(appBarButton);
+        // ------------------------------------------------------------- actions
 
-        //    // Crea una nuova voce di menu con la stringa localizzata da AppResources.
-        //    ApplicationBarMenuItem appBarMenuItem = new ApplicationBarMenuItem(AppResources.AppBarMenuItemText);
-        //    ApplicationBar.MenuItems.Add(appBarMenuItem);
-        //}
+        private void OnCheckDevice(object sender, RoutedEventArgs e)
+        {
+            CheckDeviceState();
+        }
+
+        private void OnProbe(object sender, RoutedEventArgs e)
+        {
+            log.Add("--- capability probe ---");
+
+            ProbeReport report = CapabilityProbe.Run();
+            foreach (ProbeLine line in report.Lines)
+            {
+                log.Add(line.Line);
+            }
+            log.Add("saved: " + report.SavedTo);
+            log.Add(report.CanPatch
+                ? "at least one route for installing the CA works on this phone"
+                : "no route worked: fall back to ca/install-root-ca.reg (WPinternals or CMD Injector)");
+        }
+
+        private void OnApply(object sender, RoutedEventArgs e)
+        {
+            if (patchSet == null || patchSet.Patches.Count == 0)
+            {
+                log.Add("FAIL  nothing to apply: this build carries no patch set");
+                return;
+            }
+
+            log.Add("--- applying " + patchSet.Patches.Count + " patch(es) ---");
+
+            PatchRun run = PatchEngine.Apply(patchSet);
+            foreach (PatchResult result in run.Results)
+            {
+                log.Add(result.Line);
+            }
+            log.Add("saved: " + run.SavedTo);
+
+            if (run.RebootRequired)
+            {
+                RebootText.Visibility = Visibility.Visible;
+                RebootButton.IsEnabled = true;
+                log.Add("REBOOT REQUIRED  the trusted root store is read while the phone boots");
+            }
+            else
+            {
+                log.Add("no reboot needed: nothing was written, or what was needed was already in place");
+            }
+
+            CheckDeviceState();
+        }
+
+        private void OnReboot(object sender, RoutedEventArgs e)
+        {
+            log.Add("--- reboot attempt ---");
+
+            RebootAttempt attempt = RebootService.TryReboot();
+            log.Add((attempt.Accepted ? "ACCEPTED  " : "REFUSED  ") + attempt.Route + "  " + attempt.Detail);
+
+            if (!attempt.Accepted)
+            {
+                log.Add("restart the phone by hand: hold the power button and swipe down");
+            }
+        }
+
+        // -------------------------------------------------------------- state
+
+        private void LoadPatchSet()
+        {
+            try
+            {
+                patchSet = PatchSetLoader.Load();
+                primaryPatch = patchSet.Patches.Count > 0 ? patchSet.Patches[0] : null;
+
+                StatusText.Text = string.Format(
+                    "{0} patch(es), generated {1}, lab {2}",
+                    patchSet.Patches.Count,
+                    string.IsNullOrEmpty(patchSet.GeneratedAt) ? "unknown" : patchSet.GeneratedAt,
+                    patchSet.Lab == null || string.IsNullOrEmpty(patchSet.Lab.AdvertiseIp)
+                        ? "not set"
+                        : patchSet.Lab.AdvertiseIp);
+
+                ApplyButton.IsEnabled = primaryPatch != null;
+            }
+            catch (Exception ex)
+            {
+                patchSet = null;
+                primaryPatch = null;
+                ApplyButton.IsEnabled = false;
+                StatusText.Text = "no patch set embedded in this build";
+                log.Add("FAIL  " + ex.Message);
+            }
+        }
+
+        private void CheckDeviceState()
+        {
+            if (primaryPatch == null)
+            {
+                StateText.Text = "root CA on device: unknown (no patch set)";
+                return;
+            }
+
+            string detail;
+            bool present = PatchEngine.IsAlreadyPresent(primaryPatch, out detail);
+            StateText.Text = "root CA on device: " + (present ? "present" : "not present") + "  (" + detail + ")";
+        }
     }
 }

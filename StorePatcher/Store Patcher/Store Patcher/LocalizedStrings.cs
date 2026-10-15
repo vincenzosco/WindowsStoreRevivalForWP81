@@ -1,14 +1,17 @@
-﻿using Store_Patcher.Resources;
+using Store_Patcher.Resources;
 
 namespace Store_Patcher
 {
     /// <summary>
-    /// Fornisce l'accesso alle risorse stringa.
+    /// Access to the string resources, for XAML bindings that need them.
     /// </summary>
     public class LocalizedStrings
     {
         private static AppResources _localizedResources = new AppResources();
 
-        public AppResources LocalizedResources { get { return _localizedResources; } }
+        public AppResources LocalizedResources
+        {
+            get { return _localizedResources; }
+        }
     }
 }

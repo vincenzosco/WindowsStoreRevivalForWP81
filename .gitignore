@@ -29,3 +29,5 @@ StorePatcher/**/*.suo
 StorePatcher/**/*.user
 StorePatcher/**/*.appxrecipe
 StorePatcher/**/AppPackages/
+# Per-install, generated from the lab CA by `node tools/app.mjs patch`.
+StorePatcher/**/patches.json

@@ -11,6 +11,7 @@
 // Needs outbound DNS/TCP for the "forwarding still works" check; everything
 // else is hermetic and runs offline.
 
+import crypto from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
@@ -32,6 +33,8 @@ import { describeDirectHandshakeFailure } from '../src/proxy.mjs';
 import { StoreRouter } from '../src/store/router.mjs';
 import { buildHandlers } from '../src/store/handlers.mjs';
 import { query } from './dnsprobe.mjs';
+import { buildPatchSet, readZipEntries, zipEntry, CAPABILITY } from './app.mjs';
+import { buildCertBlob } from './make-rootreg.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -49,6 +52,47 @@ const results = [];
 function check(name, ok, detail = '') {
   results.push({ name, ok });
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  ${detail}` : ''}`);
+}
+
+/**
+ * A minimal ZIP holding one stored (uncompressed) entry.
+ *
+ * The XAP reader in tools/app.mjs is what proves the built artifact carries the
+ * patch set and the interop capability. Exercising it on a zip built here keeps
+ * that check independent of whether an XAP happens to be on disk.
+ */
+function makeStoredZip(name, text) {
+  const data = Buffer.from(text, 'utf8');
+  const nameBytes = Buffer.from(name, 'utf8');
+
+  const local = Buffer.alloc(30 + nameBytes.length);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);              // version needed to extract
+  local.writeUInt16LE(0, 6);               // flags
+  local.writeUInt16LE(0, 8);               // method 0: stored
+  local.writeUInt32LE(0, 14);              // crc32: not validated by the reader
+  local.writeUInt32LE(data.length, 18);    // compressed size
+  local.writeUInt32LE(data.length, 22);    // uncompressed size
+  local.writeUInt16LE(nameBytes.length, 26);
+  nameBytes.copy(local, 30);
+
+  const central = Buffer.alloc(46 + nameBytes.length);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(0, 10);            // method 0: stored
+  central.writeUInt32LE(data.length, 20);
+  central.writeUInt32LE(data.length, 24);
+  central.writeUInt16LE(nameBytes.length, 28);
+  central.writeUInt32LE(0, 42);            // local header offset
+  nameBytes.copy(central, 46);
+
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(1, 8);
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(central.length, 12);
+  eocd.writeUInt32LE(local.length + data.length, 16);
+
+  return Buffer.concat([local, data, central, eocd]);
 }
 
 /**
@@ -631,6 +675,36 @@ async function main() {
     check('tools: canary labels a local probe as this PC and reads what it asked for',
       canary.code === 2 && /this PC, not the device/.test(canary.out) && /GET \/probe/.test(canary.out),
       `exit=${canary.code} deviceHits=${(canary.out.match(/DEVICE/g) || []).length}`);
+    // --- the app's patch set (generated here, applied on the phone) --------
+    // The app carries no certificate of its own: it carries this patch set, and
+    // the blob inside it must be the exact value Windows writes for the lab CA.
+    // If that drifts, the phone is patched with bytes the desktop side never
+    // verified - the failure this whole arrangement exists to prevent.
+    const caDer = await fsp.readFile(path.join(config.pki.dir, 'ca.der'));
+    const patchSet = buildPatchSet({ caDer, advertiseIp: FAKE_LAN_IP, generatedAt: '2026-10-15T00:00:00.000Z' });
+    const patch = patchSet.patches[0];
+    const expectedThumbprint = crypto.createHash('sha1').update(caDer).digest('hex').toUpperCase();
+
+    check('app: the patch set carries the CA thumbprint',
+      patch.thumbprint === expectedThumbprint,
+      `thumbprint=${patch.thumbprint}`);
+    check('app: the patch blob is the byte-exact value Windows writes',
+      Buffer.from(patch.blobBase64, 'base64').equals(buildCertBlob(caDer)),
+      `blob=${Buffer.from(patch.blobBase64, 'base64').length} bytes, der=${patch.derBase64.length} base64 chars`);
+    check('app: the patch is a cert-root naming the lab and requiring a reboot',
+      patch.kind === 'cert-root' && patch.hive === 'HKLM' && patch.store === 'Root'
+        && patch.requiresReboot === true && patchSet.lab.advertiseIp === FAKE_LAN_IP,
+      JSON.stringify({ kind: patch.kind, hive: patch.hive, store: patch.store, reboot: patch.requiresReboot }));
+
+    const probeZip = makeStoredZip('WMAppManifest.xml', `<Capability Name="${CAPABILITY}"/>`);
+    const zipEntries = readZipEntries(probeZip);
+    check('app: the XAP reader reads an entry out of a zip',
+      zipEntries.length === 1 && zipEntries[0].name === 'WMAppManifest.xml'
+        && zipEntry(probeZip, 'WMAppManifest.xml').data.toString('utf8').includes(CAPABILITY),
+      `entries=${zipEntries.map((e) => e.name).join(',')}`);
+    check('app: the XAP reader reports a missing entry as missing',
+      zipEntry(probeZip, 'patches.json') === null,
+      'asked for patches.json, which the test zip does not contain');
   } finally {
     await proxy.stop();
     await dns.stop();

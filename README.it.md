@@ -440,7 +440,8 @@ src/
     handlers.mjs  store-health + catalog-bridge
     fixtures/     catalogo di esempio per lavorare offline
 tools/
-  selftest.mjs         35 verifiche end-to-end, incluse watch e canary
+  selftest.mjs         40 verifiche end-to-end, incluse watch, canary e patch set dell'app
+  app.mjs              driver dell'app: patch set dal lab, build del XAP, deploy USB
   watch.mjs            mostra solo il traffico che arriva dal dispositivo,
                        compresi i TCP accettati e gli handshake rifiutati
   canary.mjs           ascolta sulle porte che il lab NON serve e segnala se il
@@ -450,6 +451,7 @@ tools/
   analyze-captures.mjs report del protocollo + suggerimenti di config
   make-rootreg.mjs     blob di registro per la CA (con --verify)
   dnsprobe.mjs         query DNS grezza su porta arbitraria
+StorePatcher/           l'app WP8.1 (Store Patcher), vedi docs/superpowers/specs/
 ca/                    generato: CA, leaf, .reg
 captures/              generato: sessioni, body, log DNS
 ```
