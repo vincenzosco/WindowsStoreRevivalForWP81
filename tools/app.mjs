@@ -10,6 +10,8 @@
 //    node tools/app.mjs deploy [--dry-run] install it on the phone over USB
 //    node tools/app.mjs all               patch, build, deploy
 //    node tools/app.mjs status            what is present, without changing anything
+//    node tools/app.mjs push-ca <file>    put a CA (and the DNS it belongs to) on the phone
+//    node tools/app.mjs toolchain         whether the WP8.1 native tools are installed
 //
 // Every external process is started with execFile and an argument array rather
 // than through a shell: on Windows the shell is MSYS bash, which rewrites
@@ -320,6 +322,53 @@ export async function deployApp({ dryRun = false, launch = true, device = 'de' }
   }
 }
 
+// ---------------------------------------------------------------- toolchain
+
+/**
+ * Where the Windows Phone 8.1 native toolchain puts things when it is installed.
+ *
+ * This exists because the native experiment cannot be attempted without it: VS2019
+ * dropped Windows Phone 8.1 native support, so the ARM compiler has to come from
+ * VS2013 Update 4+ or VS2015 with the Windows Phone 8.1 tools component. Guessing
+ * which component to tick wasted time once already, so the check reports what it
+ * actually found instead of assuming.
+ */
+export const NATIVE_TOOLCHAIN = {
+  compilers: [
+    'C:/Program Files (x86)/Microsoft Visual Studio 14.0/VC/WPSDK/WP81/bin/x86/arm/cl.exe',
+    'C:/Program Files (x86)/Microsoft Visual Studio 12.0/VC/WPSDK/WP81/bin/x86/arm/cl.exe',
+    'C:/Program Files (x86)/Microsoft Visual Studio 14.0/VC/WPSDK/WP81/bin/arm/cl.exe',
+    'C:/Program Files (x86)/Microsoft Visual Studio 12.0/VC/WPSDK/WP81/bin/arm/cl.exe',
+  ],
+  libraries: [
+    'C:/Program Files (x86)/Windows Phone Kits/8.1/lib/ARM/WindowsPhoneCore.lib',
+    'C:/Program Files (x86)/Windows Phone Kits/8.1/lib/ARM/ucrt.lib',
+  ],
+  targets: [
+    'C:/Program Files (x86)/MSBuild/Microsoft/WindowsPhone/v8.1/Microsoft.Cpp.WindowsPhone.8.1.targets',
+  ],
+};
+
+/** Report which pieces of the native toolchain are present. */
+export function checkNativeToolchain() {
+  const present = (list) => list.filter((candidate) => fs.existsSync(candidate));
+  const compilers = present(NATIVE_TOOLCHAIN.compilers);
+  const libraries = present(NATIVE_TOOLCHAIN.libraries);
+  const targets = present(NATIVE_TOOLCHAIN.targets);
+
+  return {
+    ready: compilers.length > 0 && libraries.length > 0 && targets.length > 0,
+    compilers,
+    libraries,
+    targets,
+    missing: [
+      compilers.length ? null : 'ARM compiler for Windows Phone 8.1 (VC/WPSDK/WP81)',
+      libraries.length ? null : 'Windows Phone 8.1 ARM libraries (Windows Phone Kits/8.1/lib/ARM)',
+      targets.length ? null : 'MSBuild targets for Windows Phone 8.1 C++',
+    ].filter(Boolean),
+  };
+}
+
 // ------------------------------------------------------------------ reports
 
 /** Locate the isolated storage explorer, which is how the device reports get off the phone. */
@@ -389,6 +438,103 @@ export async function pullReports({ device = 'de' } = {}) {
   return { destination, reports };
 }
 
+/**
+ * Read a certificate from disk as DER, accepting either encoding people actually have.
+ *
+ * @returns {Buffer} the DER bytes
+ */
+export function readCertificateDer(file) {
+  const raw = fs.readFileSync(file);
+  if (raw.length === 0) throw new Error(`${prettyPath(file)} is empty`);
+  if (raw[0] === 0x30) return raw;
+
+  const text = raw.toString('utf8');
+  const begin = text.indexOf('-----BEGIN CERTIFICATE-----');
+  const end = text.indexOf('-----END CERTIFICATE-----');
+  if (begin === -1 || end === -1) {
+    throw new Error(`${prettyPath(file)} is neither DER (does not start with 0x30) nor a PEM certificate`);
+  }
+
+  const der = Buffer.from(text.slice(begin + 27, end).replace(/\s+/g, ''), 'base64');
+  if (der.length === 0 || der[0] !== 0x30) throw new Error(`${prettyPath(file)}: the PEM body is not a DER certificate`);
+  return der;
+}
+
+/**
+ * Put a certificate authority, and the address it belongs to, on the phone.
+ *
+ * The app reads these from `certificates/` in its isolated storage, which is the
+ * only channel that exists for showing it an authority the lab is not serving: the
+ * patch set is baked into the XAP at build time, so comparing two authorities would
+ * otherwise mean rebuilding the app for each one.
+ *
+ * The upload is verified rather than assumed - `dir` lists what actually landed,
+ * because `rs` reports success even when it has copied nothing.
+ */
+export async function pushCertificate({ file, dns = null, hosts = [], device = 'de', dryRun = false } = {}) {
+  if (!file) throw new Error('usage: node tools/app.mjs push-ca <certificate file> [--dns <address>] [--host <name>]');
+
+  const der = readCertificateDer(file);
+  const thumbprint = sha1Thumbprint(der);
+  const name = path.basename(file);
+
+  log.info(`certificate: ${prettyPath(file)} (${der.length} bytes DER)`);
+  log.info(`SHA-1: ${thumbprint}`);
+  log.info(`DNS address to declare: ${dns || 'none (the app will say the address is not declared)'}`);
+
+  if (dryRun) {
+    log.info('dry run: nothing was uploaded');
+    return { thumbprint, uploaded: false };
+  }
+
+  const binary = findIsoTool();
+  if (!binary) {
+    throw new Error('ISETool.exe not found. Install the Windows Phone 8.1 SDK, or copy the file into '
+      + 'the app isolated storage by hand with the Isolated Storage Explorer.');
+  }
+
+  // `ts` writes <destination>/IsolatedStore/..., so `rs` is given the same shape back.
+  const staging = path.join(os.tmpdir(), 'storepatcher-push');
+  const folder = path.join(staging, 'IsolatedStore', 'certificates');
+  fs.rmSync(staging, { recursive: true, force: true });
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, name), der);
+
+  if (dns) {
+    const lines = [dns];
+    for (const host of hosts) lines.push(host);
+    fs.writeFileSync(path.join(folder, 'lab.txt'), `${lines.join('\n')}\n`);
+  }
+
+  const id = productId();
+
+  try {
+    await execFileAsync(binary, ['rs', device, id, staging], { maxBuffer: 16 * 1024 * 1024 });
+  } catch (err) {
+    const output = `${err.stdout || ''}${err.stderr || ''}`.trim();
+    const hint = err.code === 3221225477
+      ? '\nISETool crashed with an access violation (0xC0000005), which is what it does when the phone '
+        + 'is locked or asleep: wake it, keep the screen on, and retry.'
+      : '';
+    throw new Error(`upload failed (exit ${err.code ?? '?'}).\n${output || err.message}${hint}`);
+  }
+
+  // Verify by listing the device: "it said completato" is not evidence that a file
+  // arrived, and a picker that shows nothing is indistinguishable from a failed upload.
+  let listing = '';
+  try {
+    const result = await execFileAsync(binary, ['dir:certificates', device, id], { maxBuffer: 4 * 1024 * 1024 });
+    listing = `${result.stdout || ''}${result.stderr || ''}`.trim();
+  } catch (err) {
+    listing = `could not list the device folder: ${err.message}`;
+  }
+
+  log.info('isolated storage certificates/ now contains:');
+  for (const line of listing.split('\n')) log.info(`  ${line}`);
+
+  return { thumbprint, uploaded: true, listing };
+}
+
 // ------------------------------------------------------------------- cli
 
 function report(checks) {
@@ -449,6 +595,33 @@ if (isMainModule(import.meta.url)) {
         if (result.ran) log.info(result.output || 'deploy finished');
         break;
       }
+      case 'push-ca': {
+        // Flags that consume the next argument, so a value can never be mistaken
+        // for the file name.
+        const takesValue = new Set(['--dns', '--host', '--device']);
+        const positional = [];
+        const hosts = [];
+        let dns = null;
+
+        for (let i = 0; i < args.length; i += 1) {
+          const arg = args[i];
+          if (arg === 'push-ca') continue;
+
+          if (arg.startsWith('-')) {
+            const value = args[i + 1];
+            if (arg === '--dns' && value) dns = value;
+            if (arg === '--host' && value) hosts.push(value);
+            if (takesValue.has(arg)) i += 1;
+            continue;
+          }
+
+          positional.push(arg);
+        }
+
+        const result = await pushCertificate({ file: positional[0], dns, hosts, device, dryRun });
+        log.info(`thumbprint to look for on the phone: ${result.thumbprint}`);
+        break;
+      }
       case 'report': {
         const pulled = await pullReports({ device });
         log.info(`snapshot written to ${prettyPath(pulled.destination)}`);
@@ -469,13 +642,29 @@ if (isMainModule(import.meta.url)) {
         if (deployed.ran) log.info(deployed.output || 'deploy finished');
         break;
       }
+      case 'toolchain': {
+        const toolchain = checkNativeToolchain();
+        log.info(`native toolchain ready: ${toolchain.ready}`);
+        log.info(`  compilers found: ${toolchain.compilers.length}`);
+        log.info(`  libraries found: ${toolchain.libraries.length}`);
+        log.info(`  MSBuild targets found: ${toolchain.targets.length}`);
+        if (!toolchain.ready) {
+          log.warn('missing: ' + toolchain.missing.join('; '));
+          log.warn('install Visual Studio 2013 Update 4+ or 2015 with the "Windows Phone 8.1" ');
+          log.warn('tools component, which is what ships the ARM compiler and the WP81 libs.');
+          log.warn('What the native experiment needs is written in the design doc, section');
+          log.warn('"The capability probe".');
+        }
+        break;
+      }
       case 'status':
         process.exit(await status());
         break;
       default:
         process.stderr.write(
-          'usage: node tools/app.mjs [patch|build|deploy|report|all|status]\n'
-          + '         [--dry-run] [--no-launch] [--device de|xd|<index>]\n',
+          'usage: node tools/app.mjs [patch|build|deploy|report|toolchain|all|status]\n'
+          + '         [--dry-run] [--no-launch] [--device de|xd|<index>]\n'
+          + '       node tools/app.mjs push-ca <file> [--dns <address>] [--host <name>]\n',
         );
         process.exit(2);
     }

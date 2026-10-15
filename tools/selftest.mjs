@@ -33,7 +33,7 @@ import { describeDirectHandshakeFailure } from '../src/proxy.mjs';
 import { StoreRouter } from '../src/store/router.mjs';
 import { buildHandlers } from '../src/store/handlers.mjs';
 import { query } from './dnsprobe.mjs';
-import { buildPatchSet, readZipEntries, zipEntry, CAPABILITY } from './app.mjs';
+import { buildPatchSet, readZipEntries, zipEntry, readCertificateDer, CAPABILITY } from './app.mjs';
 import { buildCertBlob } from './make-rootreg.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -710,6 +710,33 @@ async function main() {
         && patchSet.lab.hosts.length === testHosts.length
         && patchSet.lab.hosts[0] === testHosts[0],
       `ip=${patchSet.lab.advertiseIp} hosts=${JSON.stringify(patchSet.lab.hosts)}`);
+
+    // The picker on the phone compares authorities by their bytes, and the operator
+    // compares them by thumbprint. Both readings have to agree with what the desktop
+    // pushes, including when the file on disk is PEM rather than DER - which is the
+    // form people actually have.
+    const pushedFromPem = readCertificateDer(path.join(config.pki.dir, 'ca.crt'));
+    const pushedFromDer = readCertificateDer(path.join(config.pki.dir, 'ca.der'));
+    check('app: a pushed CA is read identically from PEM and from DER',
+      pushedFromPem.equals(caDer) && pushedFromDer.equals(caDer),
+      `pem=${pushedFromPem.length} bytes, der=${pushedFromDer.length} bytes, ca=${caDer.length} bytes`);
+    check('app: a pushed CA carries the same thumbprint as the patch set',
+      crypto.createHash('sha1').update(pushedFromPem).digest('hex').toUpperCase() === expectedThumbprint,
+      `thumbprint=${expectedThumbprint}`);
+
+    // A file that is not a certificate must be refused here, not uploaded and then
+    // shown on the phone as an unreadable entry.
+    const notACertificate = path.join(WORK, 'not-a-certificate.txt');
+    await fsp.writeFile(notACertificate, 'this is not a certificate\n');
+    let refusal = null;
+    try {
+      readCertificateDer(notACertificate);
+    } catch (err) {
+      refusal = err.message;
+    }
+    check('app: push-ca refuses a file that is not a certificate',
+      Boolean(refusal) && /neither DER \(does not start with 0x30\) nor a PEM/.test(refusal),
+      refusal ? refusal.slice(0, 90) : 'accepted the file');
 
     const probeZip = makeStoredZip('WMAppManifest.xml', `<Capability Name="${CAPABILITY}"/>`);
     const zipEntries = readZipEntries(probeZip);

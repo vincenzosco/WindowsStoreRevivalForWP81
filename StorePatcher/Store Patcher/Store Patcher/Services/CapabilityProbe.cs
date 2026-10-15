@@ -75,6 +75,21 @@ namespace Store_Patcher.Services
             lines.Add("");
             foreach (ProbeLine line in report.Lines) lines.Add(line.Line);
 
+            // What the picker will show, reported here so that one launch is enough to
+            // read back what this phone was offered - including when it was offered
+            // nothing, which is the case where the picker looks broken but is not.
+            try
+            {
+                List<CertificateEntry> offered = CertificateInventory.List(PatchSetLoader.Load());
+                lines.Add("");
+                lines.AddRange(CertificateInventory.Report(offered));
+            }
+            catch (Exception ex)
+            {
+                lines.Add("");
+                lines.Add("certificate authorities offered: could not be listed - " + ex.Message);
+            }
+
             if (!report.CanPatch)
             {
                 // Measured on the Lumia 625 with this very app: every native call comes

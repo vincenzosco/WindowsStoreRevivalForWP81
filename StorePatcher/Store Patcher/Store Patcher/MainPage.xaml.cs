@@ -5,9 +5,11 @@
 // every step reports what it found, including "this does not work on this phone".
 
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Text;
 using System.Windows;
+using System.Windows.Controls;
 using Microsoft.Phone.Controls;
 
 using Store_Patcher.Models;
@@ -20,6 +22,7 @@ namespace Store_Patcher
         private readonly ObservableCollection<string> log = new ObservableCollection<string>();
         private PatchSet patchSet;
         private PatchDefinition primaryPatch;
+        private List<CertificateEntry> certificates = new List<CertificateEntry>();
 
         public MainPage()
         {
@@ -66,7 +69,42 @@ namespace Store_Patcher
             if (opening)
             {
                 DetailsText.Text = BuildDetails();
+                LoadCertificates();
             }
+        }
+
+        /// <summary>
+        /// Fill the selection list with every authority this phone is being offered.
+        ///
+        /// Selecting one is the point of the screen: the status line says the CA is
+        /// missing, and the answer to "which CA, and which DNS" is one tap away.
+        /// </summary>
+        private void LoadCertificates()
+        {
+            certificates = CertificateInventory.List(patchSet);
+            CertificateList.ItemsSource = null;
+            CertificateList.ItemsSource = certificates;
+
+            if (certificates.Count > 0)
+            {
+                // Select the first entry without going through the event: the list is
+                // rebuilt every time the panel opens, and doing it here keeps the
+                // detail text and the highlighted row from ever disagreeing.
+                CertificateList.SelectedIndex = 0;
+                CertificateDetail.Text = certificates[0].Describe();
+            }
+            else
+            {
+                CertificateDetail.Text = "No certificate authority is offered by this build: the\n"
+                    + "patch set carries none, and nothing was pushed into isolated storage.";
+            }
+        }
+
+        private void OnCertificateSelected(object sender, SelectionChangedEventArgs e)
+        {
+            CertificateEntry entry = CertificateList.SelectedItem as CertificateEntry;
+            if (entry == null) return;
+            CertificateDetail.Text = entry.Describe();
         }
 
         private string BuildDetails()
@@ -111,6 +149,9 @@ namespace Store_Patcher
             text.AppendLine("runtime refuses native calls from app code, which the capability probe");
             text.AppendLine("reports with the exact error. Import ca/install-root-ca.reg with");
             text.AppendLine("WPinternals or CMD Injector, reboot, then check this screen again.");
+            text.AppendLine();
+            text.AppendLine("Select an authority below to see the DNS address it belongs to and the");
+            text.AppendLine("names that address is meant to answer for.");
 
             return text.ToString();
         }

@@ -103,6 +103,17 @@ produces no capture at all. Two ways to do it:
    storage, so the device can be diagnosed without transcribing a screen. Pulling reports
    needs the phone awake and unlocked: ISETool dies with an access violation on a sleeping
    device.
+
+   Tapping the status card on the phone opens the authority picker: it lists the CA
+   embedded in this build and any certificate pushed into the app's isolated storage,
+   and selecting one shows the DNS address that authority belongs to, the names it
+   answers for, and whether its bytes are identical to the lab's CA. To put a second
+   authority (and the address it owns) on the phone:
+
+   ```bash
+   npm run app:push-ca -- ca/ca.crt --dns 192.168.0.220
+   npm run app:toolchain    # whether the WP8.1 native tools are installed
+   ```
 2. **WPinternals** — mount the phone registry and import `ca/install-root-ca.reg`
    (generate it with `npm run make-rootreg`).
 

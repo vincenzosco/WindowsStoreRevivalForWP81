@@ -101,6 +101,7 @@
     <Compile Include="Models\PatchResult.cs" />
     <Compile Include="Services\CapabilityProbe.cs" />
     <Compile Include="Services\CertificateInstaller.cs" />
+    <Compile Include="Services\CertificateInventory.cs" />
     <Compile Include="Services\Diagnostics.cs" />
     <Compile Include="Services\PatchEngine.cs" />
     <Compile Include="Services\PatchSetLoader.cs" />

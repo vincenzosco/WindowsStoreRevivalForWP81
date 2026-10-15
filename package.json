@@ -21,6 +21,8 @@
     "app:build": "node tools/app.mjs build",
     "app:deploy": "node tools/app.mjs deploy",
     "app:report": "node tools/app.mjs report",
+    "app:push-ca": "node tools/app.mjs push-ca",
+    "app:toolchain": "node tools/app.mjs toolchain",
     "canary": "node tools/canary.mjs",
     "rehearse": "node tools/rehearse.mjs",
     "make-rootreg": "node tools/make-rootreg.mjs",

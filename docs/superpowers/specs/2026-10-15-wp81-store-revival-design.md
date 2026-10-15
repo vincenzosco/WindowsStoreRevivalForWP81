@@ -220,6 +220,69 @@ Consequences, and they are already the fallbacks this design specified:
 Still unknown: whether a differently packaged app (native component, or a deployment that
 actually grants interop) can do it. Not resolved from here, and not claimed.
 
+### Why a native DLL of our own would not settle it
+
+The plan was to add a native ARM DLL with a single export: if the call worked, the
+capability is granted and the registry route reopens; if it failed with the same error,
+the platform refuses native calls outright. Reading the error again closes most of that
+gap without a compiler: the refusal names **the method**, not the library, and it fires for
+`ntdll.dll`, `crypt32.dll` and `advapi32.dll` alike. Since it precedes library resolution,
+changing the target library - including to one of ours - produces the same answer.
+
+The message is also not specific to this phone. It is what any Windows Phone Silverlight
+app gets for `DllImport`, which is why two unrelated developers hit it verbatim while
+trying to load an ordinary C++ DLL from a Silverlight app. That is the app model speaking,
+not this device and not this patch set.
+
+What that leaves is one question, and only one: does the check depend on the capability
+being granted, or is it unconditional? A native DLL in the package answers it - *if* it can
+be built. Which brings us to the toolchain.
+
+### The WP8.1 native toolchain on this machine (measured)
+
+`node tools/app.mjs toolchain` reports what is actually present, instead of guessing which
+installer component is missing:
+
+| Piece | State |
+| --- | --- |
+| Windows Phone 8.1 ARM libraries (`Windows Phone Kits/8.1/lib/ARM/WindowsPhoneCore.lib`) | **present** |
+| MSBuild targets (`Microsoft.Cpp.WindowsPhone.8.1.targets`) | **present** |
+| ARM compiler for the WP81 toolset (`VC/WPSDK/WP81/.../cl.exe`) | **missing** |
+
+So the SDK half is already installed; what is absent is the C++ compiler side, which VS2019
+dropped and which only VS2013 Update 4+ or VS2015 ships. A separate finding: VS2012 is on
+this machine with the **WP8.0** cross-compiler `VC/WPSDK/WP80/bin/x86_arm/cl.exe`. It
+builds ARM code, but for the 8.0 toolset, which does not produce a component an 8.1 app can
+load - so it does not substitute for the missing piece.
+
+Until that compiler exists, the experiment is not runnable here, and no claim is made about
+its outcome.
+
+### The certificate picker, and how far it is verified
+
+Tapping the status card now answers the question it used to leave open: *which* authority,
+and *which* DNS address it belongs to. The card lists every authority the phone is offered -
+the one embedded in the patch set first, then any pushed into isolated storage under
+`certificates/` - and selecting one shows its DNS address, the names that address answers
+for, its SHA-1, and whether its bytes are identical to the lab's CA.
+
+An address is never inferred. It comes from `lab.advertiseIp` for the embedded CA, or from a
+`lab.txt` companion file for a pushed one, and the screen says "not declared" when neither
+exists. `node tools/app.mjs push-ca <file> --dns <address>` places a certificate and that
+companion file on the phone, and verifies the upload with `dir` rather than trusting the
+`rs` exit status.
+
+Verified: the app compiles with `X509Certificate` on this platform, the self-test is 44/44
+(including that a pushed CA reads identically from PEM and DER, that it carries the same
+thumbprint as the patch set, and that a file which is not a certificate is refused rather
+than uploaded), and the XAP was built and deployed to the Lumia.
+
+Not yet verified, and the reason is mechanical: reading the device's own report back needs
+ISETool, and ISETool exits with an access violation (0xC0000005) in **both** directions while
+the phone is locked. The upload and the snapshot failed identically within seconds of each
+other, which is what points at device state rather than at the upload command. The evidence
+is waiting on the phone: the app writes the authority list into `probe.txt` on every launch.
+
 ## Risks
 
 | Risk | Mitigation |

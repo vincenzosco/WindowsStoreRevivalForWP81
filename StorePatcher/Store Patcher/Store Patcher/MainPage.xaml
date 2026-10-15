@@ -44,6 +44,17 @@
 
             <StackPanel x:Name="DetailsPanel" Visibility="Collapsed" Margin="4,8,4,0">
                 <TextBlock x:Name="DetailsText" TextWrapping="Wrap" FontSize="19"/>
+
+                <!-- The authorities, one per line: the one embedded in this build come
+                     first, then anything pushed into isolated storage. Selecting one
+                     shows its DNS address - which is the question this whole screen
+                     exists to answer. -->
+                <TextBlock Text="CERTIFICATE AUTHORITIES - TAP ONE TO SELECT" Margin="0,12,0,4"
+                           FontSize="17" Style="{StaticResource PhoneTextSubtleStyle}"/>
+                <ListBox x:Name="CertificateList" MaxHeight="280"
+                         SelectionChanged="OnCertificateSelected"/>
+                <TextBlock x:Name="CertificateDetail" TextWrapping="Wrap" FontSize="19"
+                           Margin="4,4,4,0"/>
             </StackPanel>
 
             <Button x:Name="CheckButton" Content="check device state" Click="OnCheckDevice"/>
