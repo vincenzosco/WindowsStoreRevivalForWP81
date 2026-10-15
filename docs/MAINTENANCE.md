@@ -22,8 +22,8 @@ curl -X POST http://<lab address>:8899/__lab/reload
 
 | Command | What it proves | Needs |
 | --- | --- | --- |
-| `npm run selftest` | 95 end-to-end checks: the lab's own behaviour, the page's shape, the mass-storage registry bytes | nothing |
-| `npm run read-vocabulary` | 19 checks: every page type, template type, structural path and byte offset in `src/store/vocabulary.mjs` is still present on the phone | phone in mass storage, elevated |
+| `npm run selftest` | 99 end-to-end checks: the lab's own behaviour, the page's shape, the mass-storage registry bytes, and that the page carries every path of the parser's page grammar | nothing |
+| `npm run read-vocabulary` | One check per name and path in `src/store/vocabulary.mjs` - page types, template types, the parser's whole page-grammar run, every byte offset - still present on the phone. The tool prints the count | phone in mass storage, elevated |
 | `npm run store:page` | What the page *carries* right now, read back from the file that was written | nothing |
 | `npm run doctor` | One-screen state: config, listeners, CA, device traffic, the next step | lab running |
 | `npm run watch` | Live device-only traffic, answered 200s and refused handshakes named | lab running |
@@ -94,7 +94,7 @@ the registry hive (F-010), the response cache (F-003), the logs, and the files u
 Keep it that way: no administrator password in a script, a config file or a document, and no
 scheduled task left behind after an elevated read.
 
-## Two footguns learned the hard way
+## Footguns learned the hard way
 
 1. **`npm run selftest` wipes `.selftest/`.** Every readout, every copy taken off the phone and
    every comparison written there is gone after a suite run - which is exactly what happened on
@@ -115,6 +115,24 @@ scheduled task left behind after an elevated read.
    $e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\tools\phone-readout.ps1", [ref]$null, [ref]$e); $e
    ```
 
+4. **A capture holds this PC's own traffic as well as the device's.** `npm run rehearse` and every replay
+   run through the lab and land in `captures/`, and the aggregate report counts them: 75 of the 113
+   exchanges in the 2026-10-15 session were ours, and reading the summary alone made the device look like
+   it was asking for six hosts it never asked for (F-012). **Sort before reading**, by `client.address`
+   (the lab's own address means us) and by `user-agent` (`wp8-store-lab-rehearsal` means us, `ZDM/4.0;
+   Windows Mobile 8.1` means the Store client, `Windows Phone Search` and `IEMobile` mean other system
+   components). `npm run watch` does this for its DNS section - it drops every address of this machine -
+   but **not** for the exchanges it prints, and `npm run analyze` reports the aggregate, which is where the
+   confusion comes from. The user agents are in the capture index, not in the report.
+5. **Do not redirect the suite's output into `.selftest/`.** That directory is deleted by the run itself,
+   so the log of a green run disappears with it. Write logs to `%TEMP%` or anywhere outside the tree.
+6. **Our own inspection tools build a slightly different page than the device is served.** `npm run
+   store:page` and `npm run rehearse` use a query reconstructed from the capture, which omits the six
+   `Flight`/`SEG0`-`SEG5` parameters the phone sends (F-013): 116 bytes, all of them in the echoed self
+   link. The live handler echoes the real request, so this is a difference in what *we* look at, not in
+   what the device gets - worth knowing before a difference in the bytes is read as a difference in the
+   response.
+
 ## Data and what is safe to keep
 
 | Path | Content | In the repository? |
@@ -122,6 +140,7 @@ scheduled task left behind after an elevated read.
 | `captures/` | Full request/response sessions, including headers and bodies | **No** - and it can contain account tokens: never publish it |
 | `ca/` | The lab's CA, its **private key** and the leaf certificates | No |
 | `.selftest/` | Readouts, copies taken off the phone, comparison output | No — and ⚠️ **`npm run selftest` deletes this directory on every run** (`fs.rmSync` at the top of the suite). Never keep the only copy of anything here: re-take it with the command that produced it |
+| `%TEMP%\wp-massstorage\*.strings.txt` | String runs of the phone's `ZMarketplace.dll` and `ZuneAssets480x800.dll`, extracted by hand on 2026-10-15 | No - and it is the only copy of the client's strings that does not need the phone. Windows may clear `%TEMP%`; the durable route is `npm run read-vocabulary` with the phone mounted. Anything read out of these dumps belongs in `src/store/vocabulary.mjs`, with its offset, or it is gone with them |
 | `src/store/fixtures/` | The catalog and the archived page the page is built from | Yes - this is the baseline |
 | `docs/` | This register | Yes |
 

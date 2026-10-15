@@ -20,8 +20,10 @@ the PC at `192.168.0.220`. Where the clock matters: the device's `EdmCache` time
 | Hive written to the device | byte-identical, SHA-256 `51DB8FD46E1683585A1D5600B1EEC902283A423ED938242A9DFFF71A9A23B6D6` | `certutil -hashfile` on both copies |
 | Page the device cached | 29893 bytes, SHA-256 `3226D56F7930A6312F6FE008DB205EF528151DC3EA9FBECDE435915DC2A12923` | elevated readout on the phone, 2026-10-15 — re-take with `tools/phone-readout.ps1` |
 | Page built today from the fixture | 29893 bytes, identical except `<a:updated>` | `npm run store:page`, `.selftest/cmp.fresh.txt` |
-| Checks in the suite | 95, all passing | `npm run selftest` |
-| Machine-verified vocabulary | every page type, template type, path and offset still present on the phone | `npm run read-vocabulary`, 19 checks |
+| Checks in the suite | 99, all passing | `npm run selftest`, 2026-10-15 |
+| Page grammar the parser walks | 27 paths declared, 22 required, all 22 carried by the page — in both document shapes | `npm run selftest` |
+| Difference between the page we serve and the page `store:page` builds | 116 bytes, the six `Flight`/`SEG0`-`SEG5` parameters the phone sends and the tool's reconstruction omits | replay of the phone's own query, 2026-10-15 |
+| Machine-verified vocabulary | every page type, template type, path and offset still present on the phone | `npm run read-vocabulary` (needs the phone mounted) |
 
 ## F-001 The backend is gone, so the page has to be produced here
 
@@ -61,9 +63,12 @@ the PC at `192.168.0.220`. Where the clock matters: the device's `EdmCache` time
   from the PC side?
 - **Method** Phone in mass storage mode; elevated readout of the whole device tree, with the
   relevant files copied out: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/phone-readout.ps1`.
-  Report and copies land under `.selftest/`, which **`npm run selftest` wipes on every run** - the
-  copies taken on 2026-10-15 are gone for that reason, and this finding stands on the command, not
-  on the file (see the rule in `README.md`).
+  Report and copies land under `.selftest/`, which **`npm run selftest` wipes on every run**: the
+  **elevated** readouts taken earlier on 2026-10-15 are gone for that reason (the `EdmCache` copy
+  directory is there and empty), while the unelevated report of 18:49 and the crash-report copy
+  survived, having been written after the last suite run. Which of the two halves survives is a
+  matter of timing, not of design, so this finding stands on the command and not on the file
+  (see the rule in `README.md`).
 - **Evidence** `Data\SharedData\EdmCache\Short\0` holds four entries keyed by the exact request:
   15:31:19, 16:14:09 and 16:25:22 are **14 bytes** and read `{"probe":true}` (SHA-256
   `C775500EA34EDED73C2A3C3BEDE193F0D839E6C14B36F21B6CC31472E0720A91`) - the body of an earlier
@@ -220,6 +225,72 @@ the PC at `192.168.0.220`. Where the clock matters: the device's `EdmCache` time
   `https://cdn.marketplaceedgeservice.windowsphone.com/v9/catalog/storePages` answered `200` through
   the MITM - so both listeners earn their place.
 
+## F-012 The capture mixes this PC's replays with the device, so traffic has to be sorted before it is read
+
+- **Date** 2026-10-15 · **Area** lab evidence
+- **Question** The session report attributes 113 exchanges to the device, including `POST /v8/catalog/updates`,
+  six `wscont*` hosts and requests to `marketplaceimages`. F-005 says the device asked for the page and
+  nothing else. Which is right?
+- **Method** Read `captures/session-2026-10-15_15-36-48/index.jsonl` per exchange rather than in
+  aggregate, and separate by `client.address` and `request.headers['user-agent']`. This PC replays the
+  device's requests through the lab with `user-agent: wp8-store-lab-rehearsal` and arrives from the lab's
+  own address, `192.168.0.220`, which is exactly why the aggregate cannot tell them apart.
+- **Evidence** Of 113 exchanges, **75** carry `wp8-store-lab-rehearsal` from `192.168.0.220` — this PC.
+  Of the 24 that came from elsewhere, three distinct requests exist in the whole session, over four
+  hours: 12× `GET http://cdn.marketplaceedgeservice.windowsphone.com/v9/catalog/storePages?typeId=DynamicHub.Main
+  &…&Flight=&SEG0=&SEG1=&SEG2=&SEG3=&SEG4=&SEG5=&optedOut=true` (all `200`, one single parameter shape,
+  from `192.168.0.136`), 8× `HEAD http://account.nokia.com/` (`502`, agent `MSIE 10.0 … Windows Phone OS 8.0`,
+  pairs 10 s apart and hourly at `:57:06`), and 4× `GET https://ssl-api.bing.com/winphone/clientconfig/…`
+  (`502`, agent `Windows Phone Search`). Every `POST /v8/catalog/updates` in the session is ours.
+- **Conclusion** F-005 holds and is stronger than it was: the device asked for **one** thing, over plain
+  HTTP, and nothing else — no updates check, no image, no detail page — which is a narrower behaviour than
+  the aggregate suggested, not a wider one. The requests that looked like follow-up activity are the
+  lab's own rehearsal loop.
+- **Does not establish** That the two `502`s (`account.nokia.com`, `ssl-api.bing.com`) are harmless: they
+  are the device's own account and client-config traffic, they fail against the real network too (F-006),
+  and they are logged by a different agent than the Store client's. Nothing here shows the Store reads them.
+- **Method note** The separation was done with a throwaway script under `.selftest/`, which the suite has
+  since deleted (`MAINTENANCE.md`, footgun 1). The two markers above are what make it repeatable in a few
+  lines; the counts are recorded here so the number does not depend on the script surviving.
+
+## F-013 The page carries the parser's whole grammar — and one of our tools inspects a slightly different page
+
+- **Date** 2026-10-15 · **Area** page grammar
+- **Question** The client fetches the page and loops. Is the page missing something the client's parser
+  walks? The six paths this project had been checking are the six somebody picked out by hand, and the
+  client's own list is longer.
+- **Method** Read the parser's string run out of the phone's `ZMarketplace.dll` (`@28776`-`@33224`, the
+  same extraction `npm run read-vocabulary` performs) and walk every path of the page grammar against the
+  document the lab serves — and against the archived response of the real service, as the second witness.
+  The walk is now a check in `npm run selftest`, so the question does not have to be answered by hand again.
+- **Evidence** The grammar is 27 paths, 22 of them required: `/StorePage`, `/Panes/Pane`
+  (`@28776`, beside the parser's own `Found %d Store Panes`), `/Templates/Template` (`@28824`, `Found %d
+  Store Templates`), `/feed`, `/entry`, `/feed/entry`, `/feed/link`, `/feed/entry/id`, `/feed/impressionId`,
+  `/feed/entry/editorialItems/editorialItem`, `/feed/entry/applications/application` and its `/id`,
+  `/offers/offer` and the offer's `/displayPrice`, `/price`, `/licenseRight`, plus seven field names the
+  parser reads relative to a node it selects first. **The served page carries all 22**, in both document
+  shapes (`storePage` and `panes`), asserted as 22/22 by `npm run selftest`; the same walk over the atom
+  shape reports 12 missing, which is what makes the check worth something. The five not carried —
+  `/feed/isActionable` and the entry-level `/feed/entry/offers/offer…` spelling — are **also absent from
+  the archived response**, so each is marked optional with that reason in `src/store/vocabulary.mjs` rather
+  than invented into the page. The paths in the same string run that are *not* page paths (credit-card,
+  payment-instrument, IAP-detail and application-detail responses; the chart/collection `StoreObject`
+  model) are recorded there too, with the reason, so the next reader does not have to re-derive them.
+- **Conclusion** There is no missing structural element to fix: the document carries everything the parser
+  names, and the field names it does not carry are spelled in a case the real page does not use (the
+  archive writes `averageUserRating`, the strings say `/AverageUserRating`), so the archived page settles
+  the spelling and the strings do not. **A suspect is removed rather than added** — the loop in F-005 is
+  not explained by a hole in the document, which is why E-001 tests the arrangement of what is there.
+- **Does not establish** That the client *parses* what it is sent. Carrying a path is not walking it: the
+  parser may require an order, a type or a value this comparison knows nothing about, and the device's
+  verdict is still the only witness to that (F-003, F-005).
+- **Tool defect found on the way** `npm run store:page` and `npm run rehearse` build their document from a
+  **reconstructed** query that omits the six `Flight`/`SEG0`-`SEG5` parameters the phone actually sends
+  (F-012) — 116 bytes of difference, and every one of them inside the echoed self link. The live handler is
+  not affected: it echoes the request it received (`src/store/protocol.mjs`, the `selfHref: requestPath`
+  line), which the replay above confirms. So what the *device* is served is right; what our *inspection
+  tools* show is a page built from a nearly identical request.
+
 ## Open experiments
 
 Each one changes **a single variable**, and each names the value it replaced so it can be put back.
@@ -233,6 +304,13 @@ Each one changes **a single variable**, and each names the value it replaced so 
   the answer verified **from the PC**: `x-lab-page-format: panes`, 55234 bytes, 8 sections, and 17 of
   the document's 34 items now sit inside `<Panes>`. The next Store open on the phone gets this page,
   so the experiment runs itself: what it asks for *afterwards* is the result.
+- **Re-verified against the running lab on 2026-10-15 18:23 UTC**, by replaying the phone's *exact*
+  request (all 17 parameters, `Flight` and `SEG0`-`SEG5` included) from the PC over plain HTTP: `200`,
+  `application/atom+xml; charset=utf-8`, `content-length: 55234`, `x-lab-page-type: DynamicHub`,
+  `x-lab-template-type: 003`, `x-lab-template-types-known: 000,003,004,015,017`, root `<StorePage>`, and
+  the page echoes the query it was asked for (F-013). What this does **not** establish: that the
+  device received anything at all — it is the lab's own answer read from the PC, and the request on
+  the wire is still the experiment.
 - **Waiting for** The phone's verdict. A page it accepts should produce follow-up traffic (images, a
   detail page); a repeat of F-005's one-request cycle means no - and then the candidate moves to
   `templateTypeForm` (`attribute` vs `element`), which is the other open question about the same
