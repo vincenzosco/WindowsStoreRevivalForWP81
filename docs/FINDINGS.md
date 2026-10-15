@@ -362,8 +362,10 @@ Each one changes **a single variable**, and each names the value it replaced so 
   1. `livestore.protocol.templateTypeForm`: `both` → `attribute`. One line; undo is the value it replaced.
   2. Remove the five `502`-injecting names from `dns.hijack.names` **and** `proxy.mitm.hosts`
      (`login.live.com`, `clientconfig.passport.net`, `go.microsoft.com`, `account.nokia.com`,
-     `az717532.vo.msecnd.net`) and `POST /__lab/reload`. Undo: the names are in `config.json`'s
-     `_comment_account`, in both lists, and in this entry.
+     `az717532.vo.msecnd.net`) and `POST /__lab/reload`. `ssl-api.bing.com` is deliberately left
+     in: it answers nothing on the real network either (F-006), so removing it would change
+     nothing and would blur the variable with a name that does not belong to it. Undo: the names
+     are in `config.json`'s `_comment_account`, in both lists, and in this entry.
 - **Before either** Check that the device would have connected at all: it resolved those names and the
   capture holds **no** HTTP request from it to any of them, so a removed hijack may be a no-op exactly as
   F-006 found for `ssl-api.bing.com`. `directHandshakeErrors` in `GET /__lab/status` is where a connection
