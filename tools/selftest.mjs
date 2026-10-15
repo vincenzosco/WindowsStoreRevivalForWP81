@@ -35,7 +35,8 @@ import { buildHandlers } from '../src/store/handlers.mjs';
 import { buildStorePageFeed, buildApplicationListFeed, buildProductUpdatesResponse, uuidForApp, uuidForCollection, categoryId, normalizeVersion, findAppByUuid, isUuid, normalizePageFormat } from '../src/store/catalog-feed.mjs';
 import { pageSections } from '../src/store/protocol.mjs';
 import {
-  DEFAULT_TEMPLATE_TYPE, TEMPLATE_GRAMMAR, TEMPLATE_TYPES, PAGE_TYPES,
+  DEFAULT_TEMPLATE_TYPE, TEMPLATE_GRAMMAR, TEMPLATE_TYPES, PAGE_TYPES, PAGE_PARSE_PATHS,
+  PATHS_NEAR_THE_PAGE_GRAMMAR,
   checkTemplateType, templateTypesForPageType, whyNotATemplate, PROVENANCE,
 } from '../src/store/vocabulary.mjs';
 import { query } from './dnsprobe.mjs';
@@ -70,6 +71,76 @@ function check(name, ok, detail = '') {
  *
  * @returns {string|null} a description of the first problem, or null.
  */
+/**
+ * Read a document into the chains of element names a path lookup can be run
+ * against.
+ *
+ * Why not a list of hand-written regexes per path: a path is a claim about the
+ * client's parser, and the parser's own list is longer than anyone will remember
+ * to write a test for. This walks the document once and answers any path from
+ * src/store/vocabulary.mjs, so adding a path to the module adds a check here.
+ *
+ * Namespaces are stripped (`a:feed` is `feed`, which is how the parser spells its
+ * paths) and case is **not**: the parser's strings are the authority on spelling,
+ * so a page that capitalises a name differently fails rather than passing
+ * silently. Matching is relative to the document element, which is how a
+ * `/Panes/Pane` path reads: the root's child `Panes`, then its child `Pane`.
+ *
+ * `scope` decides the reading: `root` (the default) is a path from the document
+ * element, `anywhere` is a name the parser reads relative to a node it selects
+ * first, so only that it is carried is checkable from here.
+ *
+ * @returns {{root: string, carries: (path: string, scope?: string) => boolean}}
+ */
+function elementIndex(xml) {
+  const local = (name) => String(name).split(':').pop();
+  const root = { name: '', children: [] };
+  const stack = [root];
+  for (const m of xml.matchAll(/<(\/?)([A-Za-z][\w:.-]*)((?:\"[^\"]*\"|[^>\"])*?)(\/?)>/g)) {
+    const [, closing, name, , selfClosing] = m;
+    if (closing) {
+      if (stack.length > 1) stack.pop();
+      continue;
+    }
+    const node = { name: local(name), children: [] };
+    stack[stack.length - 1].children.push(node);
+    if (!selfClosing) stack.push(node);
+  }
+  const chains = [];
+  const walk = (node, chain) => {
+    for (const child of node.children) {
+      const next = [...chain, child.name];
+      chains.push(next);
+      walk(child, next);
+    }
+  };
+  walk(root, []);
+  const rootName = root.children.length ? root.children[0].name : '';
+  return {
+    root: rootName,
+    carries(path, scope = 'root') {
+      const segments = String(path).split('/').filter(Boolean).map(local);
+      // `/StorePage` names the document element itself, which has no parent chain
+      // to be found in: the path is satisfied when it is the root's own name.
+      if (segments.length === 1 && segments[0] === rootName) return true;
+      if (scope === 'anywhere') {
+        return chains.some((chain) => chain.length >= segments.length
+          && chain.some((_, start) => start + segments.length <= chain.length
+            && segments.every((name, i) => chain[start + i] === name)));
+      }
+      return chains.some((chain) => chain.length >= segments.length + 1
+        && chain[0] === rootName
+        && segments.every((name, i) => chain[i + 1] === name));
+    },
+  };
+}
+
+/** The paths in `list` that a document does not carry, ignoring the optional ones. */
+function pathsAbsentFrom(xml, list) {
+  const index = elementIndex(xml);
+  return list.filter((entry) => entry.required !== false && !index.carries(entry.path, entry.scope));
+}
+
 function xmlProblem(xml) {
   const stack = [];
   let i = 0;
@@ -410,20 +481,32 @@ async function main() {
   // the client builds its model out of - which is what happened here. The panes
   // block was absent from every page the lab had served, and the device's answer to
   // it was to ask twice and then ask for nothing else.
-  const flatPaths = [
-    { path: 'Panes/Pane', present: /<Panes>[\s\S]*?<Pane>[\s\S]*?<\/Pane>[\s\S]*?<\/Panes>/.test(homeXml) },
-    { path: 'Templates/Template', present: homeXml.includes('<Templates><Template') },
-    { path: 'feed/entry', present: (homeXml.match(/<a:entry>/g) || []).length > 0 },
-    { path: 'feed/link', present: (homeXml.match(/<link>/g) || []).length > 0 },
-    { path: 'feed/isActionable', present: true, note: 'no evidence of a value; the path must parse, not appear' },
-    { path: 'feed/impressionId', present: /<impressionId>[0-9a-f]{32}<\/impressionId>/.test(homeXml) },
-  ];
-  const missingPaths = flatPaths.filter((entry) => !entry.present && !entry.note);
+  // ... and it is checked over the parser's whole list rather than the handful of
+  // paths a person picked out. The list was previously six entries written by hand
+  // here, which meant the check could only ever fail for the six somebody had
+  // already thought about - and the paths that mattered in the end (the entry, the
+  // editorial items, the offer) were not among them.
+  const missingPaths = pathsAbsentFrom(homeXml, PAGE_PARSE_PATHS);
   check('vocabulary: the page carries every structural path the parser walks',
     missingPaths.length === 0,
     missingPaths.length
       ? `missing: ${missingPaths.map((entry) => entry.path).join(', ')}`
-      : flatPaths.map((entry) => entry.path).join(', '));
+      : `${PAGE_PARSE_PATHS.filter((e) => e.required !== false).length} path(s) of `
+        + `${PAGE_PARSE_PATHS.length} in the parser's page grammar`);
+  const optional = PAGE_PARSE_PATHS.filter((entry) => entry.required === false);
+  check('vocabulary: a path the parser names but does not require says so, and says why',
+    optional.length > 0 && optional.every((entry) => entry.why && !entry.required),
+    optional.map((entry) => `${entry.path} (${entry.why})`).join(' | '));
+  // The paths the string table holds that are *not* page requirements are kept too,
+  // because the next person to read those strings will find them and has to be able
+  // to tell which list they belong in. Each carries the offset it was read from and
+  // the reason it is not a page path.
+  const nearby = PATHS_NEAR_THE_PAGE_GRAMMAR.flatMap((group) => group.paths);
+  check('vocabulary: every path is attributed, with the offset it was read from',
+    PAGE_PARSE_PATHS.every((entry) => entry.parserOffset > 0 && entry.scope)
+      && PATHS_NEAR_THE_PAGE_GRAMMAR.every((group) => group.why && group.paths.length > 0
+        && group.paths.every((entry) => entry.parserOffset > 0)),
+    `${PAGE_PARSE_PATHS.length} page path(s), ${nearby.length} read here and not a page path`);
   check('vocabulary: there is one pane per section, and each names its own collection',
     (homeXml.match(/<Pane>/g) || []).length === sections.length
       && sections.every((section) => homeXml.includes(uuidForCollection(section.title))),
@@ -448,6 +531,14 @@ async function main() {
       && /<a:feed[\s\S]*<Panes>/.test(atomPage)
       && !atomPage.includes('<StorePage>'),
     'the switch is one setting, so the change is one variable');
+  // The negative control, without which the check above is only a claim that it
+  // passes: the same walk over a document that is not this grammar has to find
+  // paths missing. A matcher that says yes to everything would pass the positive
+  // check and never catch anything.
+  const absentOnAtom = pathsAbsentFrom(atomPage, PAGE_PARSE_PATHS);
+  check('vocabulary: the path check fails on a document that is not this grammar',
+    absentOnAtom.length > 0,
+    `${absentOnAtom.length} missing on the atom page: ${absentOnAtom.map((e) => e.path).join(', ')}`);
   check('store protocol: every catalog entry reaches the page, none is dropped',
     sections.reduce((total, section) => total + section.items.length, 0) === fixtureApps.length
       && fixtureApps.every((app) => homeXml.includes(`urn:uuid:${uuidForApp(app.id)}`)),
@@ -599,6 +690,15 @@ async function main() {
   });
   const panesHalf = panesXmlDoc.split('</Panes>')[0];
   const feedHalf = panesXmlDoc.split('</Panes>')[1] || '';
+  // The panes variant is a superset of the store page, so it has to carry the same
+  // grammar: an experiment that changes the document shape must not be able to
+  // drop a path the client walks without this failing.
+  const missingFromPanes = pathsAbsentFrom(panesXmlDoc, PAGE_PARSE_PATHS);
+  check('pageFormat panes: the variant carries every path the parser walks, like the store page',
+    missingFromPanes.length === 0,
+    missingFromPanes.length
+      ? `missing: ${missingFromPanes.map((e) => e.path).join(', ')}`
+      : `${PAGE_PARSE_PATHS.filter((e) => e.required !== false).length} path(s) carried`);
   check('pageFormat panes: the document is still a well-formed store page',
     xmlProblem(panesXmlDoc) === null
       && /^<\?xml[^?]*\?><StorePage>/.test(panesXmlDoc)

@@ -26,6 +26,8 @@ import {
   TEMPLATE_TYPES,
   CONTENT_LINK_TYPES,
   FEED_PATHS,
+  PAGE_PARSE_PATHS,
+  PATHS_NEAR_THE_PAGE_GRAMMAR,
   TEMPLATE_GRAMMAR,
   PROVENANCE,
 } from '../src/store/vocabulary.mjs';
@@ -176,7 +178,18 @@ check('every declared template type is still at the offset the module cites',
   offsetDrift === 0, `${offsetDrift} drifted`);
 
 // --- the structural paths and the type key ----------------------------------
-for (const entry of FEED_PATHS) {
+//
+// Two lists, checked the same mechanical way. FEED_PATHS is the handful the builder
+// was written against; PAGE_PARSE_PATHS is the parser's own run, down to the offer
+// inside an application, and it is the one the suite holds the served page to. The
+// paths recorded beside it as *not* page paths are checked here too, because a
+// drifting one of those would mean the two lists had been sorted wrongly.
+const pathLists = [
+  ...FEED_PATHS,
+  ...PAGE_PARSE_PATHS,
+  ...PATHS_NEAR_THE_PAGE_GRAMMAR.flatMap((group) => group.paths),
+];
+for (const entry of pathLists) {
   const found = parser.runs.find((run) => run.text === entry.path);
   check(`parser walks ${entry.path}`,
     Boolean(found) && found.offset === entry.parserOffset,

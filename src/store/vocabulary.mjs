@@ -176,6 +176,141 @@ export const TEMPLATE_GRAMMAR = {
  */
 export const TYPE_KEY_FORMS = ['attribute', 'element', 'both'];
 
+/**
+ * Every path a store page is read through, not just the six that were checked.
+ *
+ * Why this list is separate from `FEED_PATHS`: that one holds the paths somebody
+ * picked out by hand while writing the builder, and it is what `read-vocabulary`
+ * checks offsets against. This one is the parser's own run, from the page root down
+ * into the offer inside an application, read from the same binary in the same pass.
+ * The difference matters, because a page can carry all six of those and still hand
+ * the client nothing to build a model from - the entry, the editorial items and the
+ * offer were not among the six - and a check can only fail for paths somebody
+ * already thought about.
+ *
+ * `scope` is how the path reads, and it is not decoration:
+ *
+ *   root     - the path starts at the document element (`/Panes/Pane` is the
+ *              root's child `Panes`, then its child `Pane`). Asserted that way.
+ *   anywhere - the parser reads this relative to a node it selects first (an
+ *              entry, a link): the name has to be carried, the position does not
+ *              follow from the string table alone.
+ *
+ * `required: false` marks a path the parser names that a page does not have to
+ * carry, and `why` says what the evidence is. Nothing here is marked optional on
+ * a guess: each one is absent from the archived response of the real service too.
+ *
+ * Spelling is held exactly as the binary spells it, case included, because the
+ * spelling is the one thing about a path this phone can settle - and where the
+ * real service's own page disagrees with these strings (the field names below),
+ * that is recorded as a disagreement rather than resolved by lowercasing both.
+ */
+export const PAGE_PARSE_PATHS = [
+  { path: '/StorePage', parserOffset: 30024, scope: 'root', why: 'the root element name, named in the same run as the selectors below' },
+  { path: '/Panes/Pane', parserOffset: 28776, scope: 'root', why: 'beside the parser\'s own "Found %d Store Panes"' },
+  { path: '/Templates/Template', parserOffset: 28824, scope: 'root', why: 'beside "Found %d Store Templates"' },
+  { path: '/feed', parserOffset: 30012, scope: 'root' },
+  { path: '/feed/entry', parserOffset: 29272, scope: 'root' },
+  { path: '/feed/link', parserOffset: 29368, scope: 'root' },
+  { path: '/feed/entry/id', parserOffset: 30048, scope: 'root' },
+  { path: '/feed/impressionId', parserOffset: 29432, scope: 'root' },
+  { path: '/feed/entry/editorialItems/editorialItem', parserOffset: 30200, scope: 'root' },
+  { path: '/feed/entry/applications/application', parserOffset: 30288, scope: 'root' },
+  { path: '/feed/entry/applications/application/id', parserOffset: 30368, scope: 'root' },
+  { path: '/feed/entry/applications/application/offers/offer', parserOffset: 30816, scope: 'root' },
+  { path: '/feed/entry/applications/application/offers/offer/displayPrice', parserOffset: 30448, scope: 'root' },
+  { path: '/feed/entry/applications/application/offers/offer/price', parserOffset: 30576, scope: 'root' },
+  { path: '/feed/entry/applications/application/offers/offer/licenseRight', parserOffset: 30688, scope: 'root' },
+  { path: '/entry', parserOffset: 29996, scope: 'anywhere', why: 'the entry element named as a selector, not as a position from the root' },
+  { path: '/title', parserOffset: 33056, scope: 'anywhere' },
+  { path: '/link/target', parserOffset: 33028, scope: 'anywhere' },
+  { path: '/link/type', parserOffset: 33172, scope: 'anywhere' },
+  { path: '/hasLiveTile', parserOffset: 33196, scope: 'anywhere' },
+  { path: '/backgroundImage/id', parserOffset: 33072, scope: 'anywhere' },
+  { path: '/offers/offer/licenseRight', parserOffset: 33224, scope: 'anywhere' },
+  {
+    path: '/feed/isActionable',
+    parserOffset: 29392,
+    scope: 'root',
+    required: false,
+    why: 'the archived response of the real service does not carry it either, so a page '
+      + 'without it did reach a client. Whether *this* client wants a value is not settled '
+      + 'by anything read so far, and inventing one would be a second change at once',
+  },
+  {
+    path: '/feed/entry/offers/offer',
+    parserOffset: 31468,
+    scope: 'root',
+    required: false,
+    why: 'an offer carried directly by the entry: the client reads both spellings, and this '
+      + 'one is used by neither our page nor the archived response - ours sits under the '
+      + 'application, which is the shape the real page used',
+  },
+  { path: '/feed/entry/offers/offer/displayPrice', parserOffset: 31168, scope: 'root', required: false, why: 'the same alternative spelling as the entry-level offer above' },
+  { path: '/feed/entry/offers/offer/price', parserOffset: 31324, scope: 'root', required: false, why: 'the same alternative spelling as the entry-level offer above' },
+  { path: '/feed/entry/offers/offer/licenseRight', parserOffset: 31392, scope: 'root', required: false, why: 'the same alternative spelling as the entry-level offer above' },
+];
+
+/**
+ * What the rest of that string run holds, so the next reader does not have to
+ * re-derive it to find out why it is not in the list above.
+ *
+ * Grouped rather than listed one by one, because the reason is a property of the
+ * group: the paths at @29496-@31248 sit beside names of *other* responses, and the
+ * field names at @32464-@33056 are spelled in a case the real page does not use.
+ * Neither group is a claim about the page, and neither is asserted anywhere.
+ */
+export const PATHS_NEAR_THE_PAGE_GRAMMAR = [
+  {
+    why: 'the page-grammar run is interrupted by other response types, and these paths name '
+      + 'them: a credit-card list, payment instrument types and instruments, the IAP detail '
+      + 'response, the application detail response, and the chart/collection object model. '
+      + 'They document those grammars, not this page - the archived hub page carries no '
+      + 'StoreObject either.',
+    paths: [
+      { path: '/GetCreditCardResponse/CreditCards/ZuneCreditCard', parserOffset: 29496 },
+      { path: '/BatchGetIapDetailsResponse/Resources/Resource/feed', parserOffset: 29600 },
+      { path: '/PaymentInstrumentTypesResponse/PaymentInstrumentTypes/PaymentInstrumentType', parserOffset: 29704 },
+      { path: '/PaymentInstrumentsResponse/PaymentInstruments/PaymentInstrument', parserOffset: 29864 },
+      { path: '/BatchGetApplicationDetailsResponse/Resources/Resource/feed', parserOffset: 30080 },
+      { path: '/feed/StoreObjects/StoreObject', parserOffset: 30936 },
+      { path: '/feed/StoreObjects/StoreObject/Id', parserOffset: 31000 },
+      { path: '/feed/StoreObjects/StoreObject/DisplayPrice', parserOffset: 31080 },
+      { path: '/feed/StoreObjects/StoreObject/Price', parserOffset: 31248 },
+    ],
+  },
+  {
+    why: 'the field names of an entry\'s item as another response spells them: Pascal-case, '
+      + 'beside `/Action/*`, `/Reason`, `/OverrideFilter` and the tile names. The archived '
+      + 'page spells the same fields in camelCase (`averageUserRating`, `backgroundImage`) '
+      + 'and carries no `/Action`, so which of the two a storePages page uses is settled by '
+      + 'the page that worked and not by these strings - which is exactly why they are '
+      + 'recorded here and not asserted. `/averageUserRating` in camelCase is carried by both.',
+    paths: [
+      { path: '/ShortDescription', parserOffset: 32464 },
+      { path: '/AverageUserRating', parserOffset: 32500 },
+      { path: '/UserRatingCount', parserOffset: 32540 },
+      { path: '/HasLiveTile', parserOffset: 32576 },
+      { path: '/HasTrial', parserOffset: 32604 },
+      { path: '/PublisherName', parserOffset: 32624 },
+      { path: '/ImageId', parserOffset: 32656 },
+      { path: '/BackgroundImageId', parserOffset: 32676 },
+      { path: '/Action/Type', parserOffset: 32716 },
+      { path: '/Action/Subtype', parserOffset: 32744 },
+      { path: '/Action/TargetId', parserOffset: 32776 },
+      { path: '/Action/Context', parserOffset: 32812 },
+      { path: '/Reason', parserOffset: 32844 },
+      { path: '/OverrideFilter', parserOffset: 32860 },
+      { path: '/ImageType', parserOffset: 32892 },
+      { path: '/LiveTileText', parserOffset: 32916 },
+      { path: '/LiveTileImage', parserOffset: 32944 },
+      { path: '/content', parserOffset: 33112 },
+      { path: '/text', parserOffset: 33132 },
+      { path: '/link/context', parserOffset: 33144 },
+    ],
+  },
+];
+
 /** True when `id` is a page type this client asks for. */
 export function isKnownPageType(id) {
   const wanted = String(id || '').trim();
@@ -254,6 +389,8 @@ export function vocabulary() {
     defaultTemplateType: DEFAULT_TEMPLATE_TYPE,
     contentLinkTypes: CONTENT_LINK_TYPES,
     feedPaths: FEED_PATHS,
+    pageParsePaths: PAGE_PARSE_PATHS,
+    pathsNearThePageGrammar: PATHS_NEAR_THE_PAGE_GRAMMAR,
     templateGrammar: TEMPLATE_GRAMMAR,
     typeKeyForms: TYPE_KEY_FORMS,
     notATemplate: NOT_A_TEMPLATE,
