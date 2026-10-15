@@ -31,6 +31,14 @@ namespace Store_Patcher.Models
         /// <summary>Address of the lab on the local network, for display and for future url-map patches.</summary>
         [DataMember(Name = "advertiseIp")]
         public string AdvertiseIp { get; set; }
+
+        /// <summary>
+        /// Names the lab hijacks. They travel with the certificate on purpose: the
+        /// address alone does not say what has to be pointed at it, and the operator
+        /// should not have to read config.json to find out.
+        /// </summary>
+        [DataMember(Name = "hosts")]
+        public List<string> Hosts { get; set; }
     }
 
     /// <summary>

@@ -28,9 +28,23 @@
         </StackPanel>
 
         <StackPanel Grid.Row="1" Margin="12,0,12,0">
-            <TextBlock x:Name="StatusText" TextWrapping="Wrap" Style="{StaticResource PhoneTextNormalStyle}"/>
-            <TextBlock x:Name="StateText" TextWrapping="Wrap" Margin="0,8,0,8"
-                       FontSize="22" Foreground="{StaticResource PhoneAccentBrush}"/>
+            <!-- The status card is the way into the certificate and lab details: what
+                 the CA is, which address answers for the Store names, and what has to
+                 be imported for the device to trust it. -->
+            <Border x:Name="StatusCard" Background="#22FFFFFF" Padding="8"
+                    MouseLeftButtonUp="OnStatusTapped">
+                <StackPanel>
+                    <TextBlock x:Name="StatusText" TextWrapping="Wrap" Style="{StaticResource PhoneTextNormalStyle}"/>
+                    <TextBlock x:Name="StateText" TextWrapping="Wrap" Margin="0,8,0,0"
+                               FontSize="22" Foreground="{StaticResource PhoneAccentBrush}"/>
+                    <TextBlock x:Name="TapHint" Text="tap for certificate and lab details" Margin="0,6,0,0"
+                               FontSize="18" Style="{StaticResource PhoneTextSubtleStyle}"/>
+                </StackPanel>
+            </Border>
+
+            <StackPanel x:Name="DetailsPanel" Visibility="Collapsed" Margin="4,8,4,0">
+                <TextBlock x:Name="DetailsText" TextWrapping="Wrap" FontSize="19"/>
+            </StackPanel>
 
             <Button x:Name="CheckButton" Content="check device state" Click="OnCheckDevice"/>
             <Button x:Name="ProbeButton" Content="test capabilities" Click="OnProbe"/>

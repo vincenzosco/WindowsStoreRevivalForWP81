@@ -6,6 +6,7 @@
 
 using System;
 using System.Collections.ObjectModel;
+using System.Text;
 using System.Windows;
 using Microsoft.Phone.Controls;
 
@@ -47,6 +48,71 @@ namespace Store_Patcher
         private void OnCheckDevice(object sender, RoutedEventArgs e)
         {
             CheckDeviceState();
+        }
+
+        /// <summary>
+        /// Open (or close) the certificate and lab details.
+        ///
+        /// The status line alone says the CA is missing, which is true but not
+        /// actionable: what is missing is the thumbprint to import, the address that
+        /// has to answer for the Store names, and the names themselves.
+        /// </summary>
+        private void OnStatusTapped(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            bool opening = DetailsPanel.Visibility != Visibility.Visible;
+            DetailsPanel.Visibility = opening ? Visibility.Visible : Visibility.Collapsed;
+            TapHint.Text = opening ? "tap to hide the details" : "tap for certificate and lab details";
+
+            if (opening)
+            {
+                DetailsText.Text = BuildDetails();
+            }
+        }
+
+        private string BuildDetails()
+        {
+            if (primaryPatch == null)
+            {
+                return "No patch set is embedded in this build, so there is no certificate or lab address to show.";
+            }
+
+            LabInfo lab = patchSet == null ? null : patchSet.Lab;
+            string address = lab == null || string.IsNullOrEmpty(lab.AdvertiseIp)
+                ? "not set in this build"
+                : lab.AdvertiseIp;
+
+            StringBuilder text = new StringBuilder();
+
+            text.AppendLine("LAB DNS: " + address);
+            text.AppendLine("set it in Wi-Fi -> advanced -> DNS, then reconnect");
+            text.AppendLine();
+
+            text.AppendLine("ROOT CA SHA-1: " + primaryPatch.Thumbprint);
+            text.AppendLine("registry: " + primaryPatch.Hive
+                + "\\SOFTWARE\\Microsoft\\SystemCertificates\\" + primaryPatch.Store
+                + "\\Certificates\\" + primaryPatch.Thumbprint);
+            text.AppendLine();
+
+            if (lab != null && lab.Hosts != null && lab.Hosts.Count > 0)
+            {
+                text.AppendLine("THE LAB ANSWERS FOR " + lab.Hosts.Count + " NAME(S):");
+                foreach (string host in lab.Hosts)
+                {
+                    text.AppendLine("  " + host);
+                }
+            }
+            else
+            {
+                text.AppendLine("The lab name list is not in this patch set.");
+            }
+
+            text.AppendLine();
+            text.AppendLine("This build cannot write the registry or the certificate store: the");
+            text.AppendLine("runtime refuses native calls from app code, which the capability probe");
+            text.AppendLine("reports with the exact error. Import ca/install-root-ca.reg with");
+            text.AppendLine("WPinternals or CMD Injector, reboot, then check this screen again.");
+
+            return text.ToString();
         }
 
         private void OnProbe(object sender, RoutedEventArgs e)

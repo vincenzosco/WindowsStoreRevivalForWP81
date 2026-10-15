@@ -58,14 +58,16 @@ const PATCH_SCHEMA_VERSION = 1;
  * @param {{ caDer: Buffer, caPem?: string, advertiseIp?: string, generatedAt?: string }} options
  * @returns {object} the patch set, ready to be serialised
  */
-export function buildPatchSet({ caDer, caPem = null, advertiseIp = null, generatedAt = new Date().toISOString() }) {
+export function buildPatchSet({ caDer, caPem = null, advertiseIp = null, hosts = [], generatedAt = new Date().toISOString() }) {
   const thumbprint = sha1Thumbprint(caDer);
   const blob = buildCertBlob(caDer);
 
   return {
     schemaVersion: PATCH_SCHEMA_VERSION,
     generatedAt,
-    lab: { advertiseIp },
+    // `hosts` is what the lab hijacks: the names the device must ask *this* DNS for.
+    // It travels with the certificate because the two are only useful together.
+    lab: { advertiseIp, hosts },
     patches: [
       {
         id: 'lab-root-ca',
@@ -103,7 +105,8 @@ export async function generatePatches({ configPath = null, out = PATCH_FILE } = 
   const caDer = fs.readFileSync(derPath);
   const caPem = fs.existsSync(pemPath) ? fs.readFileSync(pemPath, 'utf8') : null;
   const advertiseIp = config.__advertiseIp || config.network?.advertiseIp || null;
-  const patchSet = buildPatchSet({ caDer, caPem, advertiseIp });
+  const hosts = config.dns?.hijack?.names || [];
+  const patchSet = buildPatchSet({ caDer, caPem, advertiseIp, hosts });
 
   fs.writeFileSync(out, `${JSON.stringify(patchSet, null, 2)}\n`);
   return { patchSet, file: out };

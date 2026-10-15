@@ -681,7 +681,13 @@ async function main() {
     // If that drifts, the phone is patched with bytes the desktop side never
     // verified - the failure this whole arrangement exists to prevent.
     const caDer = await fsp.readFile(path.join(config.pki.dir, 'ca.der'));
-    const patchSet = buildPatchSet({ caDer, advertiseIp: FAKE_LAN_IP, generatedAt: '2026-10-15T00:00:00.000Z' });
+    const testHosts = ['store.test.invalid', 'catalog.test.invalid'];
+    const patchSet = buildPatchSet({
+      caDer,
+      advertiseIp: FAKE_LAN_IP,
+      hosts: testHosts,
+      generatedAt: '2026-10-15T00:00:00.000Z',
+    });
     const patch = patchSet.patches[0];
     const expectedThumbprint = crypto.createHash('sha1').update(caDer).digest('hex').toUpperCase();
 
@@ -695,6 +701,15 @@ async function main() {
       patch.kind === 'cert-root' && patch.hive === 'HKLM' && patch.store === 'Root'
         && patch.requiresReboot === true && patchSet.lab.advertiseIp === FAKE_LAN_IP,
       JSON.stringify({ kind: patch.kind, hive: patch.hive, store: patch.store, reboot: patch.requiresReboot }));
+    // The details screen reads the address and the name list off the patch set. If
+    // the generator stopped carrying them, the screen would say "not in this patch
+    // set" and look like a device problem instead of a build one.
+    check('app: the patch set carries the lab address and the names it answers for',
+      patchSet.lab.advertiseIp === FAKE_LAN_IP
+        && Array.isArray(patchSet.lab.hosts)
+        && patchSet.lab.hosts.length === testHosts.length
+        && patchSet.lab.hosts[0] === testHosts[0],
+      `ip=${patchSet.lab.advertiseIp} hosts=${JSON.stringify(patchSet.lab.hosts)}`);
 
     const probeZip = makeStoredZip('WMAppManifest.xml', `<Capability Name="${CAPABILITY}"/>`);
     const zipEntries = readZipEntries(probeZip);
