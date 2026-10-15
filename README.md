@@ -18,11 +18,17 @@ the Zune catalog hosts no longer resolve — so today an intercepted Store reque
 deliberate `502`, and that `502` is the list of endpoints to emulate. The translation
 layer is not written yet.
 
-The on-device patcher **compiles, and its built artifact is checked** (the XAP must carry
-the patch set and the interop capability, or the build fails). What is deliberately *not*
-claimed is on-device behaviour: whether an interop app on this phone build can write to
-`HKLM` and restart it is answered by the app's own capability probe, not by a desktop
-test. Design, decisions and that risk are in
+The on-device patcher **compiles, deploys and runs**: it was installed and launched on a
+Lumia 625 over USB, and its reports were read back off the phone with ISETool.
+
+That first real run settled the question the design left open, and the answer is no: on
+this phone build the runtime refuses native calls from app code
+(`NotSupportedException: DllImport cannot be used on user-defined methods`), so **the app
+cannot install the CA itself**. It still detects whether the CA is present and
+byte-identical to the lab's, and it still asks for the reboot. Installing the CA stays on
+the desktop path: `ca/install-root-ca.reg` through WPinternals or CMD Injector.
+
+Design, decisions and the full measurement are in
 [`docs/superpowers/specs/2026-10-15-wp81-store-revival-design.md`](docs/superpowers/specs/2026-10-15-wp81-store-revival-design.md).
 
 ## Quick start (lab)
@@ -80,17 +86,23 @@ The root CA has to be trusted on the device before any hijacked TLS name can be
 intercepted; until then the phone connects and is refused during the handshake, which
 produces no capture at all. Two ways to do it:
 
-1. **Store Patcher app** — installs the CA and asks for the reboot. Build and deploy it
-   from here:
+1. **Store Patcher app** — on this build it cannot install the CA (the runtime refuses
+   native calls from app code, measured on device, see Status above); it verifies the CA
+   and asks for the reboot. Build, deploy and read its reports from here:
 
    ```bash
    npm run app:build        # generate the patch set from the lab CA, compile, verify
    npm run app:deploy       # phone attached over USB, developer unlocked
    ```
 
-   On the phone, run **test capabilities** first: it reports, with evidence, whether the
-   registry and certificate routes work on that build, and saves the report to isolated
-   storage.
+   ```bash
+   npm run app:report       # pull probe.txt and patches.txt back off the phone
+   ```
+
+   The app runs the capability probe on every launch and saves its report to isolated
+   storage, so the device can be diagnosed without transcribing a screen. Pulling reports
+   needs the phone awake and unlocked: ISETool dies with an access violation on a sleeping
+   device.
 2. **WPinternals** — mount the phone registry and import `ca/install-root-ca.reg`
    (generate it with `npm run make-rootreg`).
 

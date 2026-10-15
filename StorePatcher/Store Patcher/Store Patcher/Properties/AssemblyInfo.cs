@@ -1,37 +1,29 @@
-﻿using System.Reflection;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
+using System.Reflection;
 using System.Resources;
+using System.Runtime.InteropServices;
 
-// Le informazioni generali relative a un assembly sono controllate dal seguente 
-// set di attributi. Modificare i valori di questi attributi per modificare le informazioni
-// associate a un assembly.
-[assembly: AssemblyTitle("Store_Patcher")]
-[assembly: AssemblyDescription("")]
+// General information about an assembly is controlled by this set of attributes.
+
+[assembly: AssemblyTitle("Store Patcher")]
+[assembly: AssemblyDescription("Installs the lab root CA on a Windows Phone 8.1 device and asks for the reboot it needs")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("")]
-[assembly: AssemblyProduct("Store_Patcher")]
-[assembly: AssemblyCopyright("Copyright ©  2026")]
+[assembly: AssemblyProduct("Store Patcher")]
+[assembly: AssemblyCopyright("Copyright © 2026")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
-// Se si imposta ComVisible su false, i tipi in questo assembly non saranno visibili 
-// ai componenti COM. Se è necessario accedere a un tipo in questo assembly da 
-// COM, impostare su true l'attributo ComVisible per tale tipo.
+// Types in this assembly are not visible to COM components.
 [assembly: ComVisible(false)]
 
-// Se il progetto viene esposto a COM, il GUID seguente verrà utilizzato come ID della libreria dei tipi
+// GUID of the type library if this project is exposed to COM.
 [assembly: Guid("2263bd4e-3af3-45be-91fa-774ed29a144b")]
 
-// Le informazioni sulla versione di un assembly sono costituite dai seguenti quattro valori:
-//
-//      Numero di versione principale
-//      Numero di versione secondario 
-//      Numero build
-//      Revisione
-//
-// È possibile specificare tutti i valori oppure impostare valori predefiniti per i numeri relativi alla revisione e alla build 
-// usando l'asterisco '*' come illustrato di seguito:
+// Version numbers: major, minor, build, revision.
 [assembly: AssemblyVersion("1.0.0.0")]
 [assembly: AssemblyFileVersion("1.0.0.0")]
-[assembly: NeutralResourcesLanguageAttribute("it-IT")]
+
+// Must match the neutral resource file (Resources/AppResources.resx) and the
+// project's DefaultLanguage; the template shipped "it-IT" while the resources are
+// English, which made the resource lookup language disagree with the UI language.
+[assembly: NeutralResourcesLanguageAttribute("en-US")]

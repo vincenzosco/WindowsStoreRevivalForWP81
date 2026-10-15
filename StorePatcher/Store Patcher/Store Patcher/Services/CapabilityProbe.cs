@@ -75,6 +75,20 @@ namespace Store_Patcher.Services
             lines.Add("");
             foreach (ProbeLine line in report.Lines) lines.Add(line.Line);
 
+            if (!report.CanPatch)
+            {
+                // Measured on the Lumia 625 with this very app: every native call comes
+                // back as "DllImport cannot be used on user-defined methods", which is
+                // the runtime refusing managed native calls from app code. That is a
+                // property of the app model, not a mistake in the patch set, and it
+                // changes what the operator should do next.
+                lines.Add("");
+                lines.Add("No route worked, so the app cannot install the CA itself on this phone.");
+                lines.Add("The runtime refuses native calls from app code. Use the desktop path instead:");
+                lines.Add("import ca/install-root-ca.reg with WPinternals, or with CMD Injector,");
+                lines.Add("then reboot and open this app again to confirm the CA is present.");
+            }
+
             report.SavedTo = Diagnostics.Save("probe.txt", lines);
             return report;
         }

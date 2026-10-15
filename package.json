@@ -20,6 +20,7 @@
     "app:patch": "node tools/app.mjs patch",
     "app:build": "node tools/app.mjs build",
     "app:deploy": "node tools/app.mjs deploy",
+    "app:report": "node tools/app.mjs report",
     "canary": "node tools/canary.mjs",
     "rehearse": "node tools/rehearse.mjs",
     "make-rootreg": "node tools/make-rootreg.mjs",

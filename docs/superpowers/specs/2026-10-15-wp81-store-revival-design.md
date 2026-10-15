@@ -189,11 +189,42 @@ What can be verified on this machine, and is:
   the embedded patch set and the interop capability;
 - no test asserts on-device behaviour. Those results come back from the probe screen.
 
+## Measured on the device (2026-10-15, Lumia 625, RM-941)
+
+The app was built, deployed over USB (`AppDeployCmd.exe /installlaunch … /targetdevice:de`)
+and launched on the phone, and its reports were pulled back off it with ISETool. The
+probe answered the one open question, and the answer is **no**:
+
+```
+registry read : False    registry write: False    cert store API: False
+FAIL  read HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProductName
+      - call unavailable - NotSupportedException: DllImport cannot be used on user-defined methods
+FAILED  lab-root-ca  call unavailable - NotSupportedException: DllImport …
+```
+
+Every native call is refused by the runtime, before it reaches the OS. This is a property
+of the app model, not of the patch set: managed native calls from app code are not
+permitted here, and the interop capability declared in `WMAppManifest.xml` does not change
+it. A second hypothesis was tested and closed with evidence: declaring the capability in
+`Package.appxmanifest` instead does not grant anything, it fails the build with `APPX3024`
+(that manifest validates against the appx capability vocabulary, which has no `ID_CAP_*`).
+
+Consequences, and they are already the fallbacks this design specified:
+
+1. The CA is installed with `ca/install-root-ca.reg` through WPinternals or CMD Injector.
+2. The app keeps its other job, which it does well: it reports whether the CA is present on
+   the device and byte-identical to the one the lab serves, and it asks for the reboot.
+3. The `url-map` and `reg-binary` patch kinds planned for v2 share the same blocked route,
+   so v2 is only worth building if a working write route appears.
+
+Still unknown: whether a differently packaged app (native component, or a deployment that
+actually grants interop) can do it. Not resolved from here, and not claimed.
+
 ## Risks
 
 | Risk | Mitigation |
 | --- | --- |
-| An interop app cannot write HKLM on this build | Probe first; two independent routes; per-patch failure reporting; documented fallback to the `.reg`. |
+| An interop app cannot write HKLM on this build | **Confirmed on the device** (see above): the app reports it instead of pretending, and the `.reg` fallback takes over. |
 | An interop app cannot reboot the phone | The screen still says "reboot required" with manual instructions; a reboot is not silently skipped or faked. |
 | Patches the app applies are lost on reboot | Re-running the app is idempotent, and `already-present` proves persistence. |
 | Certificate pinning in the Store app defeats MITM | Out of scope here; already listed as a known limit in the lab document. |

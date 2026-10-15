@@ -37,6 +37,10 @@
 
     </Application>
   </Applications>
+  <!-- Left empty on purpose. This manifest validates against the appx capability
+       vocabulary and rejects the Silverlight names: declaring ID_CAP_INTEROPSERVICES
+       here fails the build with APPX3024, it does not grant anything. The interop
+       capability belongs in Properties/WMAppManifest.xml. -->
   <Capabilities>
   </Capabilities>
 

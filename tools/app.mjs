@@ -17,6 +17,7 @@
 // "only one project can be specified". No shell, no rewriting.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -277,14 +278,19 @@ export function findAppDeploy(candidates = [
  * The command is printed before it runs, and `--dry-run` stops after printing:
  * this is the one step that cannot be verified here, so it must be legible.
  */
-export async function deployApp({ dryRun = false, launch = true } = {}) {
+export async function deployApp({ dryRun = false, launch = true, device = 'de' } = {}) {
   if (!fs.existsSync(XAP_PATH)) {
     throw new Error(`No XAP at ${prettyPath(XAP_PATH)}. Run \`node tools/app.mjs build\` first.`);
   }
 
   const binary = findAppDeploy();
   const action = launch ? '/installlaunch' : '/install';
-  const args = [action, XAP_PATH, '-targetdevice', 'usb'];
+  // AppDeployCmd takes `<cmd> <app> <targetdevice>`, where the target is `de` for
+  // the phone attached to this PC, `xd` for the emulator, or a device index from
+  // /EnumerateDevices. There is no `usb` target, despite what the name suggests,
+  // and the flag form with a colon is required: passing `de` positionally is
+  // rejected as "value out of range".
+  const args = [action, XAP_PATH, `/targetdevice:${device}`];
 
   const printable = `"${binary || 'AppDeployCmd.exe'}" ${args.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`;
   log.info(`deploy command: ${printable}`);
@@ -297,8 +303,87 @@ export async function deployApp({ dryRun = false, launch = true } = {}) {
     );
   }
 
-  const { stdout } = await execFileAsync(binary, args, { maxBuffer: 16 * 1024 * 1024 });
-  return { ran: true, command: printable, output: stdout.trim() };
+  try {
+    const { stdout, stderr } = await execFileAsync(binary, args, { maxBuffer: 16 * 1024 * 1024 });
+    return { ran: true, command: printable, output: `${stdout}${stderr}`.trim() };
+  } catch (err) {
+    // A deployment that fails has to say why: the tool's own words are the only
+    // account of a locked phone, a missing driver or a wrong target.
+    const output = `${err.stdout || ''}${err.stderr || ''}`.trim();
+    throw new Error(
+      `deployment failed (exit ${err.code ?? '?'}).\n${output || err.message}\n`
+      + 'check: phone connected and developer-unlocked, WP8.1 SDK deployment tools installed.',
+    );
+  }
+}
+
+// ------------------------------------------------------------------ reports
+
+/** Locate the isolated storage explorer, which is how the device reports get off the phone. */
+export function findIsoTool(candidates = [
+  process.env.ISETOOL_EXE,
+  'C:/Program Files (x86)/Microsoft SDKs/Windows Phone/v8.1/Tools/IsolatedStorageExplorerTool/ISETool.exe',
+].filter(Boolean)) {
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+/**
+ * Product id of the app, read from its own manifest so the two cannot drift.
+ *
+ * The braces are kept: ISETool exits with an access violation (0xC0000005) when
+ * the id is passed bare, even though its own examples show it that way.
+ */
+export function productId() {
+  const manifest = fs.readFileSync(path.join(PROJECT_DIR, 'Properties', 'WMAppManifest.xml'), 'utf8');
+  const match = manifest.match(/ProductID="(\{[0-9a-fA-F-]{36}\})"/);
+  if (!match) throw new Error('cannot read ProductID from Properties/WMAppManifest.xml');
+  return match[1];
+}
+
+/**
+ * Pull the app's isolated storage off the phone and read the reports out of it.
+ *
+ * This is the only way to see what the device concluded - the app writes those
+ * reports precisely so it can be diagnosed without anyone transcribing a screen.
+ * The destination is passed as an argument, never through a shell, so the
+ * explorer gets a plain Windows path.
+ */
+export async function pullReports({ device = 'de' } = {}) {
+  const binary = findIsoTool();
+  if (!binary) {
+    throw new Error(
+      'ISETool.exe not found. Install the Windows Phone 8.1 SDK, or copy probe.txt and '
+      + 'patches.txt off the phone by hand (Isolated Storage Explorer).',
+    );
+  }
+
+  // Not mkdtemp: it creates the directory with mode 0700, and the ACL that maps to
+  // on Windows makes ISETool die with an access violation (0xC0000005) before it
+  // writes anything. A plain directory under the temp root is accepted.
+  const destination = path.join(os.tmpdir(), 'storepatcher-reports');
+  fs.rmSync(destination, { recursive: true, force: true });
+  fs.mkdirSync(destination, { recursive: true });
+
+  try {
+    await execFileAsync(binary, ['ts', device, productId(), destination], { maxBuffer: 16 * 1024 * 1024 });
+  } catch (err) {
+    const output = `${err.stdout || ''}${err.stderr || ''}`.trim();
+    // 0xC0000005: the explorer dies before writing anything. Measured repeatedly:
+    // it works while the phone is being used and crashes once the screen has gone
+    // off, so this is a device state, not a bad argument - say so instead of
+    // letting it read as a broken tool.
+    const hint = err.code === 3221225477
+      ? '\nISETool crashed with an access violation (0xC0000005). This is what it does when the '
+        + 'phone is locked or asleep: wake it, keep the screen on, and retry.'
+      : '';
+    throw new Error(`snapshot failed (exit ${err.code ?? '?'}).\n${output || err.message}${hint}`);
+  }
+
+  const store = path.join(destination, 'IsolatedStore');
+  const names = fs.existsSync(store) ? fs.readdirSync(store).filter((n) => n.endsWith('.txt')) : [];
+  const reports = names.map((name) => ({ name, body: fs.readFileSync(path.join(store, name), 'utf8') }));
+
+  return { destination, reports };
 }
 
 // ------------------------------------------------------------------- cli
@@ -339,6 +424,8 @@ if (isMainModule(import.meta.url)) {
   const command = args.find((arg) => !arg.startsWith('-')) || 'status';
   const dryRun = args.includes('--dry-run');
   const noLaunch = args.includes('--no-launch');
+  const deviceIndex = args.indexOf('--device');
+  const device = deviceIndex !== -1 && args[deviceIndex + 1] ? args[deviceIndex + 1] : 'de';
 
   try {
     switch (command) {
@@ -355,15 +442,27 @@ if (isMainModule(import.meta.url)) {
         break;
       }
       case 'deploy': {
-        const result = await deployApp({ dryRun, launch: !noLaunch });
+        const result = await deployApp({ dryRun, launch: !noLaunch, device });
         if (result.ran) log.info(result.output || 'deploy finished');
+        break;
+      }
+      case 'report': {
+        const pulled = await pullReports({ device });
+        log.info(`snapshot written to ${prettyPath(pulled.destination)}`);
+        if (!pulled.reports.length) {
+          log.warn('the app has written no reports yet: launch it on the phone at least once');
+          break;
+        }
+        for (const report of pulled.reports) {
+          process.stdout.write(`\n--- ${report.name} ---\n${report.body}\n`);
+        }
         break;
       }
       case 'all': {
         const result = await buildApp();
         log.info(`built ${prettyPath(result.xap)} (${result.bytes} bytes)`);
         if (!report(result.checks)) process.exit(1);
-        const deployed = await deployApp({ dryRun, launch: !noLaunch });
+        const deployed = await deployApp({ dryRun, launch: !noLaunch, device });
         if (deployed.ran) log.info(deployed.output || 'deploy finished');
         break;
       }
@@ -372,7 +471,8 @@ if (isMainModule(import.meta.url)) {
         break;
       default:
         process.stderr.write(
-          'usage: node tools/app.mjs [patch|build|deploy|all|status] [--dry-run] [--no-launch]\n',
+          'usage: node tools/app.mjs [patch|build|deploy|report|all|status]\n'
+          + '         [--dry-run] [--no-launch] [--device de|xd|<index>]\n',
         );
         process.exit(2);
     }

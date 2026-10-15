@@ -31,6 +31,15 @@ namespace Store_Patcher
         {
             LoadPatchSet();
             CheckDeviceState();
+
+            // Answer the question that decides everything else on every launch: what
+            // is this phone willing to let an app do? It is cheap and it cannot go
+            // stale - the first version of this app only did it once and then kept
+            // reporting a result that a manifest fix had already invalidated. The
+            // report is saved, so it can be read back on the PC with no one holding
+            // the phone.
+            log.Add("running the capability probe; its report can be read back from the PC");
+            RunProbe();
         }
 
         // ------------------------------------------------------------- actions
@@ -41,6 +50,12 @@ namespace Store_Patcher
         }
 
         private void OnProbe(object sender, RoutedEventArgs e)
+        {
+            RunProbe();
+        }
+
+        /// <summary>Runs the probe and reports it. Shared by the button and the first launch.</summary>
+        private void RunProbe()
         {
             log.Add("--- capability probe ---");
 
