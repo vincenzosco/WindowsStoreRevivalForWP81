@@ -54,7 +54,9 @@ instead of leaving you to infer it, and it distinguishes "the device never reach
    the root element, the template type, and how many items sit inside `<Panes>`.
 3. If the change is meant to change the device's behaviour, the only measurement that counts is
    the device's next request: `npm run watch`, and read the capture for what it asks *after* the
-   answer.
+   answer - per `client.address` and `user-agent`, never in aggregate (footgun 4). A page-shaped
+   experiment runs itself on every Store open, so its result is usually **already in the capture**
+   before anybody goes looking for it: E-001 was answered by six deliveries nobody had read (F-014).
 4. Record the outcome as a finding, including the negative result. A variable that did not move
    the device is the most valuable line in the register, because it removes a suspect.
 

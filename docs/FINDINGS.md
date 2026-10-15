@@ -291,6 +291,29 @@ the PC at `192.168.0.220`. Where the clock matters: the device's `EdmCache` time
   line), which the replay above confirms. So what the *device* is served is right; what our *inspection
   tools* show is a page built from a nearly identical request.
 
+## F-014 The `panes` variant changes nothing on the device
+
+- **Date** 2026-10-15 · **Area** Store client behaviour
+- **Question** E-001's question: is the reason the client does not render that each pane points at
+  content the client is expected to resolve, rather than carrying it inline as the archived response did?
+- **Method** `livestore.protocol.pageFormat` set to `panes` in `config.json`, lab hot-reloaded, and the
+  device's own requests read per exchange — by `client.address` and `user-agent`, which is what makes them
+  the device's (F-012). The verdict is what the device asks for *after* each delivery.
+- **Evidence** The device was served the `panes` document **six times over three hours**, each time
+  `200`, `x-lab-page-format: panes`, 55234 bytes: 17:37:19, 17:37:30 and 17:37:43 local, then 18:37:57 and
+  18:38:50, then 20:40:51. Between and after all six it asked for nothing else — no image from
+  `marketplaceimages`, no detail page, no `POST /v8/catalog/updates` — and its next Store request, minutes
+  or an hour later, was the same page again. In the same session it also met the `storePage` shape seven
+  times (29893 bytes, 17:48-18:33): same behaviour, same silence. The two shapes are the only difference
+  between those deliveries, and the device's answer was identical.
+- **Conclusion** The hypothesis is removed: the client is not waiting for the items to be carried inline,
+  and the arrangement of what the page contains is not what stops it. The variable list for the document
+  narrows to the one thing the vocabulary itself flags as undecided — `templateTypeForm` — and to causes
+  outside the document entirely (E-003).
+- **Does not establish** That the `panes` shape is *wrong*; it was never shown to be right either. Nothing
+  here shows the client parses the page at all, and the two shapes failing the same way is as consistent
+  with a failure before the parse as with one inside it.
+
 ## Open experiments
 
 Each one changes **a single variable**, and each names the value it replaced so it can be put back.
@@ -311,11 +334,43 @@ Each one changes **a single variable**, and each names the value it replaced so 
   the page echoes the query it was asked for (F-013). What this does **not** establish: that the
   device received anything at all — it is the lab's own answer read from the PC, and the request on
   the wire is still the experiment.
-- **Waiting for** The phone's verdict. A page it accepts should produce follow-up traffic (images, a
-  detail page); a repeat of F-005's one-request cycle means no - and then the candidate moves to
-  `templateTypeForm` (`attribute` vs `element`), which is the other open question about the same
-  document.
+- **Result NEGATIVE, see F-014.** The device met this page six times and asked for nothing else - the same
+  one-request cycle as `storePage`. The verdict was already in the capture before anyone went looking for it,
+  which is its own lesson: the experiment runs itself on every Store open, so its result has to be read from
+  the capture rather than waited for.
+- **State** Still `panes`, because nothing needs unarming while the page is being read: the next Store open
+  re-runs a run that is known negative. Retire the variable by setting it back, not by leaving it.
 - **Undo** Set `livestore.protocol.pageFormat` back to `storePage` and `POST /__lab/reload`.
+
+### E-003 The document is not the only suspect: what the screen says, and the 502s we inject
+
+- **Why** F-014 leaves two families of cause. One is inside the document and is a single line
+  (`templateTypeForm`: the page writes `TEMPLATETYPE` both as an attribute and as a child element, because
+  the parser's strings cannot decide which it reads — a client strict about unexpected children would reject
+  the form it does not expect). The other is outside it: the client resolves `login.live.com`,
+  `go.microsoft.com` and `clientconfig.passport.net` **between** two page fetches (17:37:24-30 local), and
+  the lab answers those three — plus `ssl-api.bing.com` and `az717532.vo.msecnd.net` at 17:48:30 — with
+  `502`, because they sit in the hijack list as a *diagnostic*. That is a failure this lab injects into the
+  Store's own account and configuration path, on hosts that are alive on the real network, and the config's
+  own comment says so and says how to undo it.
+- **The measurement that is missing, and costs one sentence** What the phone's **screen** shows after a page
+  is delivered. Every finding here records what the device *asks*; nothing records what it *displays*, and
+  the screen is the one witness that has never been read - for a client whose answer is an assert code, it
+  is also the only place that code would appear. Worth taking before either variable: it costs one Store
+  open, and it can turn two coin flips into a directed test.
+- **Variables, one at a time**
+  1. `livestore.protocol.templateTypeForm`: `both` → `attribute`. One line; undo is the value it replaced.
+  2. Remove the five `502`-injecting names from `dns.hijack.names` **and** `proxy.mitm.hosts`
+     (`login.live.com`, `clientconfig.passport.net`, `go.microsoft.com`, `account.nokia.com`,
+     `az717532.vo.msecnd.net`) and `POST /__lab/reload`. Undo: the names are in `config.json`'s
+     `_comment_account`, in both lists, and in this entry.
+- **Before either** Check that the device would have connected at all: it resolved those names and the
+  capture holds **no** HTTP request from it to any of them, so a removed hijack may be a no-op exactly as
+  F-006 found for `ssl-api.bing.com`. `directHandshakeErrors` in `GET /__lab/status` is where a connection
+  that died before it became an exchange would show, and it must be read *before* the change to be worth
+  anything after it.
+- **Waiting for** One Store open, and the screen read aloud.
+- **Undo** Both candidates are single values, named above; nothing else in `config.json` moves with them.
 
 ### E-002 Look for the client's own crash report
 
