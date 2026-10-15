@@ -25,16 +25,21 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config.mjs';
 import { createLogger } from '../src/log.mjs';
 import { Pki } from '../src/pki.mjs';
-import { Capture } from '../src/capture.mjs';
+import { Capture, countJsonl, readJsonl } from '../src/capture.mjs';
 import { DnsServer } from '../src/dns-server.mjs';
 import { MitmProxy } from '../src/proxy.mjs';
 import { ZincClient } from '../src/zinc.mjs';
 import { describeDirectHandshakeFailure } from '../src/proxy.mjs';
 import { StoreRouter } from '../src/store/router.mjs';
 import { buildHandlers } from '../src/store/handlers.mjs';
+import { buildStorePageFeed, buildApplicationListFeed, buildProductUpdatesResponse, uuidForApp, uuidForCollection, categoryId, normalizeVersion, findAppByUuid, isUuid, normalizePageFormat } from '../src/store/catalog-feed.mjs';
+import { pageSections } from '../src/store/protocol.mjs';
+import {
+  DEFAULT_TEMPLATE_TYPE, TEMPLATE_GRAMMAR, TEMPLATE_TYPES, PAGE_TYPES,
+  checkTemplateType, templateTypesForPageType, whyNotATemplate, PROVENANCE,
+} from '../src/store/vocabulary.mjs';
 import { query } from './dnsprobe.mjs';
-import { buildPatchSet, readZipEntries, zipEntry, readCertificateDer, CAPABILITY, productId, REG_FILE_NAME } from './app.mjs';
-import { buildCertBlob, buildRegFileBuffer } from './make-rootreg.mjs';
+import { buildCertBlob, buildRegEntry, buildRegFileBuffer, buildPhoneCertBlob, phoneElementId, PHONE_ELEMENT_VERSION } from './make-rootreg.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -55,44 +60,43 @@ function check(name, ok, detail = '') {
 }
 
 /**
- * A minimal ZIP holding one stored (uncompressed) entry.
+ * Walk a generated XML document and report the first thing that would make it
+ * unparseable: an unclosed or mismatched element, or an unescaped `&` in text.
  *
- * The XAP reader in tools/app.mjs is what proves the built artifact carries the
- * patch set and the interop capability. Exercising it on a zip built here keeps
- * that check independent of whether an XAP happens to be on disk.
+ * Not a validator and not meant to be one. It checks the mistakes a document
+ * assembled by string concatenation actually makes, because the device's answer
+ * to a malformed page is an error screen with a code in it, which is exactly the
+ * bug this suite is meant to catch here rather than on the phone.
+ *
+ * @returns {string|null} a description of the first problem, or null.
  */
-function makeStoredZip(name, text) {
-  const data = Buffer.from(text, 'utf8');
-  const nameBytes = Buffer.from(name, 'utf8');
-
-  const local = Buffer.alloc(30 + nameBytes.length);
-  local.writeUInt32LE(0x04034b50, 0);
-  local.writeUInt16LE(20, 4);              // version needed to extract
-  local.writeUInt16LE(0, 6);               // flags
-  local.writeUInt16LE(0, 8);               // method 0: stored
-  local.writeUInt32LE(0, 14);              // crc32: not validated by the reader
-  local.writeUInt32LE(data.length, 18);    // compressed size
-  local.writeUInt32LE(data.length, 22);    // uncompressed size
-  local.writeUInt16LE(nameBytes.length, 26);
-  nameBytes.copy(local, 30);
-
-  const central = Buffer.alloc(46 + nameBytes.length);
-  central.writeUInt32LE(0x02014b50, 0);
-  central.writeUInt16LE(0, 10);            // method 0: stored
-  central.writeUInt32LE(data.length, 20);
-  central.writeUInt32LE(data.length, 24);
-  central.writeUInt16LE(nameBytes.length, 28);
-  central.writeUInt32LE(0, 42);            // local header offset
-  nameBytes.copy(central, 46);
-
-  const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(0x06054b50, 0);
-  eocd.writeUInt16LE(1, 8);
-  eocd.writeUInt16LE(1, 10);
-  eocd.writeUInt32LE(central.length, 12);
-  eocd.writeUInt32LE(local.length + data.length, 16);
-
-  return Buffer.concat([local, data, central, eocd]);
+function xmlProblem(xml) {
+  const stack = [];
+  let i = 0;
+  while (i < xml.length) {
+    const lt = xml.indexOf('<', i);
+    if (lt === -1) break;
+    if (lt > i) {
+      const text = xml.slice(i, lt);
+      const bad = text.match(/&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/);
+      if (bad) return `unescaped & in text near ${JSON.stringify(text.slice(Math.max(0, bad.index - 10), bad.index + 10))}`;
+    }
+    const gt = xml.indexOf('>', lt);
+    if (gt === -1) return 'unterminated tag';
+    const raw = xml.slice(lt + 1, gt);
+    if (raw.startsWith('?') || raw.startsWith('!')) { i = gt + 1; continue; }
+    if (raw.startsWith('/')) {
+      const name = raw.slice(1).trim();
+      const open = stack.pop();
+      if (open !== name) return `</${name}> closes <${open}>`;
+    } else {
+      const name = (raw.match(/^[^\s/>]+/) || [''])[0];
+      if (!name) return 'element with no name';
+      if (!raw.endsWith('/')) stack.push(name);
+    }
+    i = gt + 1;
+  }
+  return stack.length ? `unclosed <${stack[stack.length - 1]}>` : null;
 }
 
 /**
@@ -248,6 +252,12 @@ async function main() {
       apiKey: '',
       cacheTtlMs: 60000,
       bridge: { enabled: true, pathPrefix: '/livestore/', source: 'fixture' },
+      protocol: {
+        enabled: true,
+        catalogFile: path.join(ROOT, 'src', 'store', 'fixtures', 'sample-catalog.json'),
+        hubTemplate: 'DynamicHub',
+        pageSize: 25,
+      },
     },
     rules: [
       {
@@ -295,6 +305,444 @@ async function main() {
     config.proxy.mitm.hosts.includes('store.test.invalid'),
     JSON.stringify(config.proxy.mitm.hosts));
   check('config: advertiseIp override respected', config.__hijackIp === FAKE_LAN_IP, config.__hijackIp);
+
+  // --- the Store protocol's own format, before any device -----------------
+  // The grammar is the one archived responses of the real service show (each
+  // element in src/store/catalog-feed.mjs names the capture it came from). What
+  // can be settled without a phone: the document is well formed, nothing a
+  // catalog carries can break it, and a GUID handed to the device resolves back
+  // to the entry it was minted from.
+  const fixtureCatalog = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'src', 'store', 'fixtures', 'sample-catalog.json'), 'utf8'),
+  );
+  const fixtureApps = fixtureCatalog.apps;
+  const sections = pageSections(fixtureCatalog, 25);
+
+  const homeXml = buildStorePageFeed({
+    sections,
+    selfHref: '/v9/catalog/storePages?typeId=DynamicHub.Main&cc=IT',
+    title: 'DynamicHub.Main-IT-WindowsPhone81',
+    id: 'DynamicHub.Main-IT-WindowsPhone81-ALL-ALL',
+    templateName: 'DynamicHub',
+    templateType: DEFAULT_TEMPLATE_TYPE,
+    typeKeyForm: 'both',
+  });
+
+  check('store protocol: the home page feed is well-formed',
+    xmlProblem(homeXml) === null, xmlProblem(homeXml) || `${homeXml.length} bytes`);
+  check('store protocol: the feed declares the catalog namespace and the page template',
+    homeXml.includes('xmlns="http://schemas.zune.net/catalog/apps/2008/02"')
+      && homeXml.includes('<templateName>DynamicHub</templateName>'),
+    homeXml.slice(0, 80));
+
+  // The update check. It answered 502 on every attempt before this, and the
+  // capture shows the phone retrying it four times in a row while the Store was
+  // starting - the only other endpoint in that flow that fails.
+  const updatesXml = buildProductUpdatesResponse({
+    skus: ['1076f542-8a6f-4cda-86e2-012bb248c9ef', 'a7b0e2f3-0000-4000-8000-000000000001'],
+  });
+  check('store protocol: the update check answers with the element names the parser names',
+    xmlProblem(updatesXml) === null
+      && updatesXml.includes('<BatchGetProductUpdatesResponse')
+      && updatesXml.includes('<Resources><Resource>')
+      && updatesXml.includes('<ProductId>1076f542-8a6f-4cda-86e2-012bb248c9ef</ProductId>')
+      && updatesXml.includes('<IsRevoked>false</IsRevoked>')
+      && updatesXml.includes('<Result>0</Result>'),
+    xmlProblem(updatesXml) || `${updatesXml.length} bytes`);
+  check('store protocol: the update check reports every SKU it was asked about, and no update',
+    (updatesXml.match(/<Resource>/g) || []).length === 2
+      && !/<CurrentPayloadId>[^<]+<\/CurrentPayloadId>/.test(updatesXml)
+      && !/true/.test(updatesXml),
+    `resources=${(updatesXml.match(/<Resource>/g) || []).length}`);
+
+  // --- the vocabulary the page is built from -------------------------------
+  //
+  // These are about the page and the phone agreeing, which is the thing that
+  // cannot be checked by generating a page and reading it back: a page can be
+  // perfectly well-formed and still name a template this device has never heard
+  // of. Every name asserted here is in src/store/vocabulary.mjs with the offset it
+  // was read from, and `npm run read-vocabulary` re-reads the phone to prove it.
+  check('vocabulary: the page names the template type the phone styles, and it is a number',
+    /^\d{3}$/.test(DEFAULT_TEMPLATE_TYPE)
+      && templateTypesForPageType('DynamicHub').includes(DEFAULT_TEMPLATE_TYPE),
+    `type=${DEFAULT_TEMPLATE_TYPE} styled=[${templateTypesForPageType('DynamicHub').join(',')}]`);
+  check('vocabulary: the page carries the type key in both spellings, so either reading finds it',
+    homeXml.includes(`<${TEMPLATE_GRAMMAR.element} ${TEMPLATE_GRAMMAR.typeKey}="${DEFAULT_TEMPLATE_TYPE}">`)
+      && homeXml.includes(`<${TEMPLATE_GRAMMAR.typeKey}>${DEFAULT_TEMPLATE_TYPE}</${TEMPLATE_GRAMMAR.typeKey}>`)
+      && homeXml.includes(`<${TEMPLATE_GRAMMAR.container}>`),
+    `element=${TEMPLATE_GRAMMAR.element} key=${TEMPLATE_GRAMMAR.typeKey}`);
+  check('vocabulary: narrowing the form to one spelling writes the type in that one only',
+    ['attribute', 'element'].every((form) => {
+      const narrowed = buildStorePageFeed({
+        sections: [], templateName: 'DynamicHub', templateType: '015', typeKeyForm: form,
+      });
+      return form === 'attribute'
+        ? narrowed.includes('<Template TEMPLATETYPE="015">') && !narrowed.includes('<TEMPLATETYPE>')
+        : narrowed.includes('<TEMPLATETYPE>015</TEMPLATETYPE>') && !narrowed.includes(' TEMPLATETYPE=');
+    }),
+    'checked on both forms');
+  check('vocabulary: the template name the page uses is one the Store client owns',
+    whyNotATemplate('DynamicHub') === null && whyNotATemplate('GamesHub') !== null,
+    whyNotATemplate('GamesHub') || 'GamesHub is not described as a decoy');
+  check('vocabulary: a name that is a template cannot pass as a template type',
+    ['GamesHub', 'MarketplaceHub', 'DynamicHub', '999', '', null].every((value) =>
+      checkTemplateType('DynamicHub', value).ok === false)
+      && checkTemplateType('DynamicHub', '003').ok === true,
+    checkTemplateType('DynamicHub', 'GamesHub').reason);
+  check('vocabulary: a page type the client does not ask for is refused',
+    checkTemplateType('NotAPageType', '003').ok === false
+      && PAGE_TYPES.some((page) => page.id === 'DynamicHub')
+      && PAGE_TYPES.every((page) => page.parserOffset > 0),
+    checkTemplateType('NotAPageType', '003').reason);
+  check('vocabulary: every declared name carries the binary offset it was read from',
+    Object.values(TEMPLATE_TYPES).every((entries) => entries.every((e) => e.uiOffset > 0))
+      && PAGE_TYPES.every((page) => page.parserOffset > 0)
+      && Boolean(PROVENANCE.binaries.parser.path),
+    `${PROVENANCE.binaries.parser.path} @${PROVENANCE.binaries.parser.dated}`);
+  check('vocabulary: the template block is a path the parser walks, not an invented container',
+    `${TEMPLATE_GRAMMAR.container}/${TEMPLATE_GRAMMAR.element}` === '/Templates/Template'.slice(1)
+      || `${TEMPLATE_GRAMMAR.container}/${TEMPLATE_GRAMMAR.element}` === 'Templates/Template',
+    `${TEMPLATE_GRAMMAR.container}/${TEMPLATE_GRAMMAR.element}`);
+
+  // The completeness property the vocabulary makes checkable: every structural
+  // path the parser walks has to be present in the page. A page can be
+  // well-formed, carry the right template type, and still be missing the container
+  // the client builds its model out of - which is what happened here. The panes
+  // block was absent from every page the lab had served, and the device's answer to
+  // it was to ask twice and then ask for nothing else.
+  const flatPaths = [
+    { path: 'Panes/Pane', present: /<Panes>[\s\S]*?<Pane>[\s\S]*?<\/Pane>[\s\S]*?<\/Panes>/.test(homeXml) },
+    { path: 'Templates/Template', present: homeXml.includes('<Templates><Template') },
+    { path: 'feed/entry', present: (homeXml.match(/<a:entry>/g) || []).length > 0 },
+    { path: 'feed/link', present: (homeXml.match(/<link>/g) || []).length > 0 },
+    { path: 'feed/isActionable', present: true, note: 'no evidence of a value; the path must parse, not appear' },
+    { path: 'feed/impressionId', present: /<impressionId>[0-9a-f]{32}<\/impressionId>/.test(homeXml) },
+  ];
+  const missingPaths = flatPaths.filter((entry) => !entry.present && !entry.note);
+  check('vocabulary: the page carries every structural path the parser walks',
+    missingPaths.length === 0,
+    missingPaths.length
+      ? `missing: ${missingPaths.map((entry) => entry.path).join(', ')}`
+      : flatPaths.map((entry) => entry.path).join(', '));
+  check('vocabulary: there is one pane per section, and each names its own collection',
+    (homeXml.match(/<Pane>/g) || []).length === sections.length
+      && sections.every((section) => homeXml.includes(uuidForCollection(section.title))),
+    `panes=${(homeXml.match(/<Pane>/g) || []).length} sections=${sections.length}`);
+
+  // The document type. Every page the lab served before this one was an Atom
+  // <a:feed> at the root - the shape of the v8 catalog/hubs responses - and the
+  // phone asserted on every one of them. `/StorePage` is the one element name in
+  // the parser's store-page grammar that a served page never carried, so the root
+  // is held here, and the older shape is held to still being what it was.
+  check('vocabulary: the page root is the element the parser looks for',
+    /<\?xml[^?]*\?><StorePage>/.test(homeXml) && homeXml.trimEnd().endsWith('</StorePage>'),
+    homeXml.slice(0, 60));
+  check('vocabulary: the panes and the template block are children of that root, not of the feed',
+    /<StorePage><Panes>[\s\S]*?<\/Panes><Templates>[\s\S]*?<\/Templates>/.test(homeXml),
+    'checked on the rendered page');
+  const atomPage = buildStorePageFeed({
+    sections, templateName: 'DynamicHub', templateType: '003', pageFormat: 'atom',
+  });
+  check('vocabulary: the older document shape is still available and unchanged',
+    /^<\?xml[^?]*\?><a:feed/.test(atomPage)
+      && /<a:feed[\s\S]*<Panes>/.test(atomPage)
+      && !atomPage.includes('<StorePage>'),
+    'the switch is one setting, so the change is one variable');
+  check('store protocol: every catalog entry reaches the page, none is dropped',
+    sections.reduce((total, section) => total + section.items.length, 0) === fixtureApps.length
+      && fixtureApps.every((app) => homeXml.includes(`urn:uuid:${uuidForApp(app.id)}`)),
+    `sections=${sections.length} apps=${fixtureApps.length}`);
+  check('store protocol: a GUID handed to the device resolves back to its entry',
+    fixtureApps.every((app) => {
+      const guid = uuidForApp(app.id);
+      return isUuid(guid) && guid === uuidForApp(app.id) && findAppByUuid(fixtureApps, guid)?.id === app.id;
+    }) && findAppByUuid(fixtureApps, '00000000-0000-4000-8000-000000000000') === null,
+    `${uuidForApp(fixtureApps[0].id)} -> ${findAppByUuid(fixtureApps, uuidForApp(fixtureApps[0].id))?.id}`);
+  check('store protocol: the image and the background of one app are not the same handle',
+    !new RegExp(`<image><id>(urn:uuid:[0-9a-f-]+)</id></image><hasLiveTile>false</hasLiveTile>[\s\S]{0,400}?<backgroundImage><id>\\1`).test(homeXml),
+    'checked on the rendered page');
+
+  // A catalog is data from outside this process: one control character, one raw
+  // `&` in a title, and the whole page becomes unparseable on the device.
+  const hostileApp = {
+    id: 'hostile',
+    name: 'A & B <x> "quoted" \u0007 bell',
+    category: 'news + weather',
+    version: '2.1',
+    release_date: '2024-03-04',
+  };
+  const hostileXml = buildApplicationListFeed({ apps: [hostileApp], selfHref: '/v9/catalog/apps', id: 'x' });
+  check('store protocol: a hostile catalog entry cannot break the XML',
+    xmlProblem(hostileXml) === null && !/[\u0000-\u0008]/.test(hostileXml)
+      && /A &amp; B &lt;x&gt; &quot;quoted&quot;\s+bell/.test(hostileXml),
+    xmlProblem(hostileXml)
+      || (hostileXml.match(/<a:title type="text">(A[^<]*)</) || [])[1]
+      || 'the escaped title is not in the document');
+  check('store protocol: a three-part version is padded to the four parts the feeds carry',
+    normalizeVersion('2.1') === '2.1.0.0' && normalizeVersion('1.0.8.61') === '1.0.8.61'
+      && normalizeVersion('') === '1.0.0.0'
+      && hostileXml.includes('<version>2.1.0.0</version>'),
+    normalizeVersion('2.1'));
+  check('store protocol: category ids are the ones the archive shows, or follow it',
+    categoryId('tools + productivity') === 'windowsphone.ToolsAndProductivity'
+      && categoryId('health + fitness') === 'windowsphone.HealthAndFitness'
+      && categoryId('news + weather') === 'windowsphone.NewsAndWeather'
+      && categoryId('something new') === 'windowsphone.SomethingNew',
+    `${categoryId('tools + productivity')} ${categoryId('something new')}`);
+
+  // --- the demo catalog, which is the one that actually runs ----------------
+  //
+  // A catalog is hand-written data, so it can be wrong in ways no builder can
+  // notice. A repeated id would mint two entries the same GUID and make the second
+  // one unreachable - `findAppByUuid` scans and returns the first match, so the
+  // device would silently get the wrong app. An app in a category nobody declared
+  // would be quietly sorted into a section of its own further down the page. Both
+  // are cheap to check here and expensive to discover from a phone screen.
+  const demoCatalog = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'src', 'store', 'fixtures', 'demo-catalog.json'), 'utf8'),
+  );
+  const demoApps = demoCatalog.apps || [];
+  const demoDeclared = (demoCatalog.categories || []).map((name) => String(name).trim().toLowerCase());
+  const demoGuids = demoApps.map((app) => uuidForApp(app.id));
+  const demoDuplicateGuid = demoGuids.find((guid, i) => demoGuids.indexOf(guid) !== i);
+  check('demo catalog: every entry has a unique id, so no two apps share a GUID',
+    demoApps.length > 0
+      && demoApps.every((app) => String(app.id || '').trim() !== '')
+      && new Set(demoGuids).size === demoGuids.length,
+    demoDuplicateGuid
+      ? `two entries hash to ${demoDuplicateGuid}`
+      : `${demoApps.length} apps, ${new Set(demoGuids).size} distinct handles`);
+  const strayApps = demoApps.filter((app) => !demoDeclared.includes(String(app.category || '').trim().toLowerCase()));
+  const emptyCategories = demoDeclared.filter((name) => !demoApps.some(
+    (app) => String(app.category || '').trim().toLowerCase() === name,
+  ));
+  check('demo catalog: every app sits in a declared category, and no declared category is empty',
+    strayApps.length === 0 && emptyCategories.length === 0 && demoDeclared.length > 0,
+    [strayApps.length ? `in no declared category: ${strayApps.map((a) => a.name).join(', ')}` : '',
+      emptyCategories.length ? `declared but empty: ${emptyCategories.join(', ')}` : '',
+      `categories=${demoDeclared.length}`].filter(Boolean).join(' | '));
+
+  const demoSections = pageSections(demoCatalog, 25);
+  const demoXml = buildStorePageFeed({
+    sections: demoSections,
+    selfHref: '/v9/catalog/storePages?typeId=DynamicHub.Main&cc=IT&lang=it-IT',
+    title: 'DynamicHub-IT-WindowsPhone81',
+    id: 'DynamicHub-IT-WindowsPhone81-ALL-ALL',
+    templateName: 'DynamicHub',
+    templateType: DEFAULT_TEMPLATE_TYPE,
+    typeKeyForm: 'both',
+  });
+  check('demo catalog: one section per declared category, each holding its own apps',
+    demoSections.length === demoDeclared.length
+      && demoSections.every((section) => {
+        const expected = demoApps.filter(
+          (app) => String(app.category).trim().toLowerCase() === section.title.toLowerCase(),
+        );
+        return expected.length === section.items.length
+          && expected.every((app) => section.items.some((item) => item.id === app.id));
+      }),
+    `${demoSections.length} sections, ${demoApps.length} apps`);
+  // Every app has to be on the page exactly once. Counting both places it is
+  // named - the link that points at it and the record that describes it - is what
+  // makes a dropped or duplicated entry visible; a plain "includes" would pass for
+  // an app that had been emitted twice.
+  const notOnce = demoApps.filter((app) => {
+    const guid = uuidForApp(app.id);
+    const links = demoXml.split(`<link><type>Application</type><target>${guid}</target></link>`).length - 1;
+    const records = demoXml.split(`<application><id>urn:uuid:${guid}</id>`).length - 1;
+    return links !== 1 || records !== 1;
+  });
+  check('demo catalog: every app reaches the page exactly once',
+    notOnce.length === 0,
+    notOnce.length
+      ? notOnce.map((app) => {
+        const guid = uuidForApp(app.id);
+        return `${app.name}: ${demoXml.split(guid).length - 1} mentions`;
+      }).join(', ')
+      : `${demoApps.length} apps, each named once as a link and once as a record`);
+  check('demo catalog: the fields the builder used to overwrite are the catalog\'s own',
+    demoXml.includes('<averageUserRating>7.416667</averageUserRating>')
+      && demoXml.includes('<userRatingCount>48</userRatingCount>')
+      && demoXml.includes('<displayPrice>1,99 €</displayPrice>')
+      && demoXml.includes('<priceCurrencyCode>EUR</priceCurrencyCode>')
+      && demoXml.includes('<hasLiveTile>true</hasLiveTile>'),
+    [
+      (demoXml.match(/<averageUserRating>([^<]*)</) || [])[1],
+      (demoXml.match(/<displayPrice>([^<]*)</) || [])[1],
+    ].join(' / '));
+  check('demo catalog: an entry that states no rating is reported as unrated, not as a guess',
+    buildApplicationListFeed({ apps: [{ id: 'no-rating', name: 'Senza Voti' }], selfHref: '/x', id: 'x' })
+      .includes('<averageUserRating>0</averageUserRating><userRatingCount>0</userRatingCount>'),
+    'the default is what every page carried before the field was read');
+
+  // --- pageFormat: panes ----------------------------------------------------
+  //
+  // The third document: the same store page, except each pane carries its
+  // section's items instead of only pointing at them. That is the arrangement of
+  // the archived response, where the entry a pane refers to holds its
+  // editorialItems inline - and the reason it is worth serving is that a variant
+  // which asks the client to resolve a reference it has already been sent is the
+  // one thing every served page so far has in common.
+  //
+  // What is held here is that it *adds* to the store page rather than replacing
+  // it: same root, same template block, same feed underneath, same handles. So a
+  // difference on the device is attributable to the items in the panes.
+  const panesXmlDoc = buildStorePageFeed({
+    sections: demoSections,
+    selfHref: '/v9/catalog/storePages?typeId=DynamicHub.Main&cc=IT&lang=it-IT',
+    title: 'DynamicHub-IT-WindowsPhone81',
+    id: 'DynamicHub-IT-WindowsPhone81-ALL-ALL',
+    templateName: 'DynamicHub',
+    templateType: DEFAULT_TEMPLATE_TYPE,
+    typeKeyForm: 'both',
+    pageFormat: 'panes',
+  });
+  const panesHalf = panesXmlDoc.split('</Panes>')[0];
+  const feedHalf = panesXmlDoc.split('</Panes>')[1] || '';
+  check('pageFormat panes: the document is still a well-formed store page',
+    xmlProblem(panesXmlDoc) === null
+      && /^<\?xml[^?]*\?><StorePage>/.test(panesXmlDoc)
+      && panesXmlDoc.trimEnd().endsWith('</StorePage>')
+      && /<Panes>[\s\S]*?<\/Panes><Templates>[\s\S]*?<\/Templates>/.test(panesXmlDoc),
+    xmlProblem(panesXmlDoc) || `${panesXmlDoc.length} bytes`);
+  check('pageFormat panes: every pane carries its own section\'s items, in order',
+    demoSections.every((section) => {
+      const pane = panesHalf.split('<Pane>').find((chunk) => chunk.includes(uuidForCollection(section.title)));
+      if (!pane) return false;
+      const named = (pane.match(/<title>([^<]*)<\/title>/) || [])[1];
+      const sequence = [...pane.matchAll(/<sequenceNumber>(\d+)<\/sequenceNumber>/g)].map((m) => Number(m[1]));
+      return named === section.title
+        && sequence.length === section.items.length
+        && sequence.every((position, index) => position === index + 1)
+        && section.items.every((app) => pane.includes(`urn:uuid:${uuidForApp(app.id)}`));
+    }),
+    `${demoSections.length} panes, ${demoSections.reduce((total, s) => total + s.items.length, 0)} items`);
+  // Each app is named twice in each view of its section - once as the link that
+  // points at it and once as the record that describes it - so the pane's content
+  // is the entry's content and not a summary of it. It also has to be in exactly
+  // one pane: an app counted in two panes would be an app the device could show
+  // in a section it does not belong to.
+  const panesOf = (guid) => panesHalf.split('<Pane>').filter((chunk) => chunk.includes(guid)).length;
+  const namings = (text2, guid) => text2.split(guid).length - 1;
+  const wrong = demoApps.filter((app) => {
+    const guid = uuidForApp(app.id);
+    return namings(panesHalf, guid) !== 2 || namings(feedHalf, guid) !== 2 || panesOf(guid) !== 1;
+  });
+  check('pageFormat panes: nothing is lost or duplicated by the items in the panes',
+    wrong.length === 0,
+    wrong.length
+      ? wrong.map((app) => {
+        const guid = uuidForApp(app.id);
+        return `${app.name}: ${namings(panesHalf, guid)} in the panes, ${namings(feedHalf, guid)} in the feed, ${panesOf(guid)} pane(s)`;
+      }).join(', ')
+      : `${demoApps.length} apps, twice in each view, each in one pane`);
+  check('pageFormat panes: a pane and its entry name the same collection',
+    demoSections.every((section) => {
+      const collection = uuidForCollection(section.title);
+      return panesHalf.split(collection).length - 1 === 1
+        && feedHalf.split(collection).length - 1 === 2;
+    }),
+    'the pane\'s target is the entry\'s id, so the two views of a section cannot drift');
+  check('pageFormat: an unknown value reads as the store page, not as a document nobody asked for',
+    normalizePageFormat('panes') === 'panes'
+      && normalizePageFormat('atom') === 'atom'
+      && normalizePageFormat('') === 'storePage'
+      && normalizePageFormat('Panes') === 'storePage'
+      && normalizePageFormat(undefined) === 'storePage',
+    `${normalizePageFormat('panes')} / ${normalizePageFormat('nonsense')}`);
+  check('pageFormat storePage: the default document is unchanged, its panes still empty',
+    !demoXml.split('</Panes>')[0].includes('<editorialItem>')
+      && demoXml.split('<editorialItem>').length - 1 === demoApps.length,
+    'the items stay in the feed unless panes is asked for');
+
+  // The handler is a decision, not a default: a lab that has not opted in must
+  // let the request through to passthrough exactly as before.
+  const probeRouter = new StoreRouter({ handlers: buildHandlers(config), logger: logger.child('store') });
+  const probeCtx = {
+    id: 0, host: '127.0.0.1', port: 443, scheme: 'https', method: 'GET',
+    path: '/v9/catalog/storePages?typeId=DynamicHub.Main', headers: {}, body: null, mitm: true, client: {},
+  };
+  const answeredWhenOn = await probeRouter.handle(probeCtx, { config, logger, zinc: null });
+  config.livestore.protocol.enabled = false;
+  const answeredWhenOff = await probeRouter.handle(probeCtx, { config, logger, zinc: null });
+  config.livestore.protocol.enabled = true;
+  check('store protocol: enabled it answers, disabled it falls through to passthrough',
+    answeredWhenOn?.status === 200 && answeredWhenOff === null,
+    `on=${answeredWhenOn?.status} off=${answeredWhenOff}`);
+  check('store protocol: the option is read live, so a hot reload takes effect',
+    (await probeRouter.handle(probeCtx, { config, logger, zinc: null }))?.status === 200,
+    're-enabled without rebuilding the router');
+
+  // The update check, routed the way the proxy routes it.
+  //
+  // This check exists because its absence cost a deployment rehearsal: the first
+  // version of the updates branch read `headers` before it was declared, which
+  // threw, which the router contains by falling through to passthrough - so the
+  // device got a 502 and the only thing that noticed was `npm run rehearse`,
+  // against the running lab. Asserting the branch builds its own response, rather
+  // than only that the builder produces the right XML, is what would have caught
+  // it here.
+  const updatesCtx = {
+    ...probeCtx,
+    method: 'POST',
+    path: '/v8/catalog/updates?os=8.10.14219.0&cc=IT&lang=it-IT',
+    body: Buffer.from('<?xml version="1.0" encoding="UTF-8"?>'
+      + '<BatchGetProductUpdatesRequest xmlns="http://schemas.zune.net/catalog/apps/2008/02">'
+      + '<Resources><Resource><InputSkuId>1076f542-8a6f-4cda-86e2-012bb248c9ef</InputSkuId>'
+      + '<InputLicenseRight>Purchase</InputLicenseRight></Resource></Resources>'
+      + '</BatchGetProductUpdatesRequest>', 'utf8'),
+  };
+  const updatesRouted = await probeRouter.handle(updatesCtx, { config, logger, zinc: null });
+  check('store protocol: the update check is routed, not fallen through',
+    updatesRouted?.status === 200
+      && updatesRouted.decision === 'store:store-protocol'
+      && updatesRouted.body.toString('utf8').includes('<ProductId>1076f542-8a6f-4cda-86e2-012bb248c9ef</ProductId>'),
+    `status=${updatesRouted?.status} decision=${updatesRouted?.decision} skus=${updatesRouted?.headers?.['x-lab-skus']}`);
+  const updatesAsGet = await probeRouter.handle(
+    { ...updatesCtx, method: 'GET' }, { config, logger, zinc: null },
+  );
+  check('store protocol: the update check refuses a method it does not define',
+    updatesAsGet?.status === 405,
+    `status=${updatesAsGet?.status} hint=${updatesAsGet?.headers ? '' : ''}${JSON.parse(updatesAsGet?.body?.toString('utf8') || '{}').hint || ''}`);
+
+  // The counter-proof, checked for what it is: with serve='archive' the page
+  // endpoint answers with a response of the real service byte for byte, and every
+  // other endpoint is untouched by it. It is NOT a one-variable substitution, and
+  // the check below asserts the headers that say so - the archived page is the
+  // games hub of an older generation, so it carries a template name (`GamesHub`)
+  // that belongs to the Xbox Games hub app and a type key this grammar does not
+  // have. Both are reported in the headers, so a later reading of the capture
+  // finds the confound instead of inferring it.
+  config.livestore.protocol.serve = 'archive';
+  const archived = await probeRouter.handle(probeCtx, { config, logger, zinc: null });
+  const archivedFile = fs.readFileSync(
+    path.resolve(config.livestore.protocol.archiveFile), 'utf8',
+  );
+  const otherEndpoint = await probeRouter.handle(
+    { ...probeCtx, path: '/v9/catalog/apps' }, { config, logger, zinc: null },
+  );
+  config.livestore.protocol.serve = 'generated';
+  check('store protocol: archive mode serves the real archived response byte for byte',
+    archived?.status === 200
+      && archived.headers['x-lab-protocol'] === 'storePages:archive'
+      && archived.body.toString('utf8') === archivedFile
+      && xmlProblem(archived.body.toString('utf8')) === null
+      && archivedFile.includes('<templateName>GamesHub</templateName>'),
+    `bytes=${archived?.body?.length} expected=${Buffer.byteLength(archivedFile)} label=${archived?.headers['x-lab-protocol']}`);
+  check('store protocol: archive mode declares the page it actually carries, and warns',
+    archived.headers['x-lab-archive-template'] === 'GamesHub'
+      && /games/.test(String(archived.headers['x-lab-archive-page']))
+      && /not a one-variable substitution/.test(String(archived.headers['x-lab-archive-warning']))
+      && whyNotATemplate(archived.headers['x-lab-archive-template']) !== null,
+    `template=${archived.headers['x-lab-archive-template']} page=${archived.headers['x-lab-archive-page']}`);
+  check('store protocol: a generated page is labelled with the vocabulary it was built from',
+    (await probeRouter.handle(probeCtx, { config, logger, zinc: null }))?.headers['x-lab-template-type'] === String(config.livestore.protocol.templateType),
+    `type=${(await probeRouter.handle(probeCtx, { config, logger, zinc: null }))?.headers['x-lab-template-type']}`);
+  check('store protocol: archive mode leaves the other endpoints alone',
+    otherEndpoint?.headers['x-lab-protocol'] === 'appList'
+      && !otherEndpoint.body.toString('utf8').includes('GamesHub')
+      && fixtureApps.every((app) => otherEndpoint.body.toString('utf8').includes(`urn:uuid:${uuidForApp(app.id)}`)),
+    `label=${otherEndpoint?.headers['x-lab-protocol']}`);
 
   // --- fake backend -------------------------------------------------------
   const pki = await new Pki({
@@ -514,6 +962,58 @@ async function main() {
         && zincResponse.headers['x-lab-source'] === 'zinc',
       `status=${zincResponse.status} error=${zincJson?.error} source=${zincResponse.headers['x-lab-source']}`);
 
+    // --- the request the device's Store opens with ------------------------
+    // Verbatim from the Lumia's capture, headers and query intact: this is what
+    // decided whether the Store opened, and it came back 502 because nothing was
+    // there to answer it.
+    const storeQuery = '/v9/catalog/storePages?typeId=DynamicHub.Main&os=8.10.14219.0&cc=IT&lang=it-IT'
+      + '&hw=402699266&dm=RM-941_eu_france_308&oemId=NOKIA&moId=&cf=&Flight=&SEG0=&SEG1=&SEG2=&SEG3=&SEG4=&SEG5=&optedOut=true';
+    const home = await httpsViaProxy({ ...target, requestPath: storeQuery, method: 'GET' });
+    check('store protocol: the Store home page is served as the XML the phone reads',
+      home.status === 200
+        && home.headers['content-type'] === 'application/atom+xml; charset=utf-8'
+        && home.headers['x-lab-protocol'] === 'storePages'
+        && xmlProblem(home.body) === null,
+      `status=${home.status} type=${home.headers['content-type']} ${xmlProblem(home.body) || ''}`);
+    check('store protocol: the query is echoed escaped, not raw',
+      home.body.includes('&amp;hw=402699266&amp;dm=RM-941_eu_france_308')
+        && !home.body.includes('&hw=402699266')
+        && !home.body.includes('&dm=RM-941'),
+      'a raw & in the self link would make the whole page unparseable');
+
+    const appList = await httpsViaProxy({ ...target, requestPath: '/v9/catalog/apps?chunkSize=50', method: 'GET' });
+    check('store protocol: the application list answers with the catalog',
+      appList.status === 200 && appList.headers['x-lab-apps'] === String(fixtureApps.length)
+        && xmlProblem(appList.body) === null
+        && fixtureApps.every((app) => appList.body.includes(`urn:uuid:${uuidForApp(app.id)}`)),
+      `status=${appList.status} apps=${appList.headers['x-lab-apps']}`);
+
+    const detail = await httpsViaProxy({
+      ...target, requestPath: `/v9/catalog/apps/${uuidForApp(fixtureApps[0].id)}`, method: 'GET',
+    });
+    check('store protocol: the GUID the page handed out resolves to that entry',
+      detail.status === 200 && detail.body.includes(fixtureApps[0].name),
+      `status=${detail.status} name=${fixtureApps[0].name}`);
+
+    const unknown = await httpsViaProxy({
+      ...target, requestPath: '/v9/catalog/apps/00000000-0000-4000-8000-000000000000', method: 'GET',
+    });
+    let unknownJson = null;
+    try { unknownJson = JSON.parse(unknown.body); } catch { unknownJson = null; }
+    check('store protocol: a GUID the lab never minted is refused, not relayed',
+      unknown.status === 404 && unknownJson?.error === 'app_not_found',
+      `status=${unknown.status} error=${unknownJson?.error}`);
+
+    const hub = await httpsViaProxy({ ...target, requestPath: '/v8/catalog/hubs?hub=lifestyle&cc=IT', method: 'GET' });
+    check('store protocol: a hub page is answered too',
+      hub.status === 200 && xmlProblem(hub.body) === null
+        && hub.body.includes('lifestyle-IT-WindowsPhone81-ALL-ALL'),
+      `status=${hub.status}`);
+
+    const postPage = await httpsViaProxy({ ...target, requestPath: '/v9/catalog/storePages', method: 'POST' });
+    check('store protocol: a non-GET is refused rather than answered',
+      postPage.status === 405, `status=${postPage.status}`);
+
     // --- blind tunnel -----------------------------------------------------
     let tunnelOk = false;
     let tunnelDetail = '';
@@ -573,9 +1073,10 @@ async function main() {
     const indexLines = (await fsp.readFile(capture.indexPath, 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
     const decisions = indexLines.map((e) => e.decision);
     // One entry per intercepted request made above:
-    // 4 rule cases + 1 plain-HTTP case + 1 direct-TLS case + 5 store-handler cases.
+    // 4 rule cases + 1 plain-HTTP case + 1 direct-TLS case + 5 store-handler
+    // cases + 6 store-protocol cases.
     check('capture: every intercepted exchange was indexed',
-      indexLines.length === 11,
+      indexLines.length === 17,
       `entries=${indexLines.length} decisions=${JSON.stringify(decisions)}`);
     check('capture: decisions are labelled per rule',
       decisions.some((d) => d === 'passthrough:passthrough-endpoint')
@@ -584,13 +1085,36 @@ async function main() {
         && decisions.includes('block:blocked-endpoint'),
       JSON.stringify(decisions));
     check('store: handler decisions are labelled with the handler name',
-      decisions.includes('store:store-health') && decisions.includes('store:catalog-bridge'),
+      decisions.includes('store:store-health') && decisions.includes('store:catalog-bridge')
+        && decisions.filter((d) => d === 'store:store-protocol').length === 6,
       JSON.stringify(decisions.filter((d) => d.startsWith('store:'))));
     const firstCapture = indexLines[0];
     check('capture: request and response bodies are stored',
       firstCapture.request.method === 'GET' && Boolean(firstCapture.response)
         && firstCapture.response.status === 200,
       JSON.stringify({ method: firstCapture.request?.method, status: firstCapture.response?.status }));
+
+    // --- reading an index too big to be one string -------------------------
+    // A long session's index passes Node's maximum string length, where
+    // `readFileSync(..., 'utf8')` throws. Every reader that caught that reported
+    // **zero exchanges** - the session's own record of what the device did, read
+    // as "nothing intercepted yet". The size cannot be reproduced cheaply here,
+    // so what is asserted is the reader's contract: every non-blank line, one at a
+    // time, including a final line without a trailing newline (a torn line is
+    // handed over and the *parser* skips it, which is what `analyze` does).
+    const jsonlPath = path.join(WORK, 'reader.jsonl');
+    await fsp.writeFile(jsonlPath, '{"n":1}\n\n{"n":2}\n{"n":3');
+    const readBack = [];
+    for await (const line of readJsonl(jsonlPath)) readBack.push(line);
+    check('capture: the index reader streams lines, blank ones ignored, without a trailing newline',
+      readBack.length === 3 && readBack[0] === '{"n":1}' && readBack[1] === '{"n":2}'
+        && readBack[2] === '{"n":3',
+      JSON.stringify(readBack));
+    let counted = null;
+    try { counted = await countJsonl(jsonlPath); } catch (err) { counted = `threw ${err.message}`; }
+    check('capture: the index is counted without ever holding it in memory',
+      counted === 3,
+      `counted=${counted} (the same three lines doctor and rehearse would report)`);
 
     const dnsLogPath = path.resolve(config.capture.dir, `dns-queries-${new Date().toISOString().slice(0, 10)}.jsonl`);
     const dnsLines = (await fsp.readFile(dnsLogPath, 'utf8').catch(() => '')).split('\n').filter(Boolean);
@@ -608,6 +1132,42 @@ async function main() {
     check('proxy: unreachable backend answers 502 with a diagnostic body',
       dead.status === 502 && deadJson?.error === 'upstream_unreachable',
       `status=${dead.status} error=${deadJson?.error || dead.body.slice(0, 60)}`);
+
+    // --- forwarding upstream to the lab itself ----------------------------
+    // The device is told to use the lab as its DNS, but the operator's PC can be
+    // pointed at the lab too - and then a hijacked name resolves, on this PC, to
+    // one of our own listeners. Relaying "upstream" then dials the lab again and
+    // each hop waits on the hop below it: nothing is ever answered, the capture
+    // log fills with the lab's own traffic, and it reads exactly like a device
+    // that never arrived. The relay has to refuse instead, and refuse at once.
+    const startedLoop = Date.now();
+    const looped = await new Promise((resolve) => {
+      const req = http.request({
+        host: '127.0.0.1', port: PLAIN_HTTP_PORT, path: '/v2/apps?store=1', method: 'GET',
+        // `localhost` is the smallest real case: it resolves to this machine, on
+        // a port this lab is itself listening on.
+        headers: { host: `localhost:${PLAIN_HTTP_PORT}` },
+      }, (res) => {
+        let body = '';
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => resolve({ status: res.statusCode, body, ms: Date.now() - startedLoop }));
+      });
+      req.on('error', (err) => resolve({ error: err.message }));
+      req.end();
+    });
+    let loopJson = null;
+    try { loopJson = JSON.parse(looped.body); } catch { loopJson = null; }
+    check('proxy: forwarding upstream to the lab itself is refused, not dialled',
+      looped.status === 502 && loopJson?.error === 'upstream_loop'
+        && proxy.stats.upstreamLoops === 1,
+      looped.error || `status=${looped.status} error=${loopJson?.error || String(looped.body).slice(0, 60)}`
+        + ` loops=${proxy.stats.upstreamLoops}`);
+    // A refusal that still costs a full upstream timeout is not a fix: the point
+    // is that the operator sees the loop immediately instead of a lab that looks
+    // merely slow while it talks to itself.
+    check('proxy: the loop is refused without waiting for the upstream timeout',
+      looped.ms < 2000,
+      `took ${looped.ms}ms, upstream timeout is ${config.upstream.timeoutMs}ms`);
 
     // --- the tools the operator actually reads ----------------------------
     // `watch` and `canary` both encode a judgement - is this the device, did it
@@ -675,122 +1235,93 @@ async function main() {
     check('tools: canary labels a local probe as this PC and reads what it asked for',
       canary.code === 2 && /this PC, not the device/.test(canary.out) && /GET \/probe/.test(canary.out),
       `exit=${canary.code} deviceHits=${(canary.out.match(/DEVICE/g) || []).length}`);
-    // --- the app's patch set (generated here, applied on the phone) --------
-    // The app carries no certificate of its own: it carries this patch set, and
-    // the blob inside it must be the exact value Windows writes for the lab CA.
-    // If that drifts, the phone is patched with bytes the desktop side never
-    // verified - the failure this whole arrangement exists to prevent.
+    // --- the certificate the mass storage route writes ---------------------
+    // The CA reaches this phone by loading its own SOFTWARE hive on this PC, so what
+    // has to be right here is the value that goes into that hive: the shape the phone
+    // itself stores, and the file reg.exe accepts. The WP8.1 app that used to carry
+    // the same certificate as a patch set is no longer part of this repo - these
+    // checks never needed it, they read the desktop's own output all along.
     const caDer = await fsp.readFile(path.join(config.pki.dir, 'ca.der'));
-    const testHosts = ['store.test.invalid', 'catalog.test.invalid'];
-    const patchSet = buildPatchSet({
-      caDer,
-      advertiseIp: FAKE_LAN_IP,
-      hosts: testHosts,
-      productId: '{00000000-0000-0000-0000-0000000000aa}',
-      generatedAt: '2026-10-15T00:00:00.000Z',
-    });
-    const patch = patchSet.patches[0];
     const expectedThumbprint = crypto.createHash('sha1').update(caDer).digest('hex').toUpperCase();
-
-    check('app: the patch set carries the CA thumbprint',
-      patch.thumbprint === expectedThumbprint,
-      `thumbprint=${patch.thumbprint}`);
-    check('app: the patch blob is the byte-exact value Windows writes',
-      Buffer.from(patch.blobBase64, 'base64').equals(buildCertBlob(caDer)),
-      `blob=${Buffer.from(patch.blobBase64, 'base64').length} bytes, der=${patch.derBase64.length} base64 chars`);
-    check('app: the patch is a cert-root naming the lab and requiring a reboot',
-      patch.kind === 'cert-root' && patch.hive === 'HKLM' && patch.store === 'Root'
-        && patch.requiresReboot === true && patchSet.lab.advertiseIp === FAKE_LAN_IP,
-      JSON.stringify({ kind: patch.kind, hive: patch.hive, store: patch.store, reboot: patch.requiresReboot }));
-    // The details screen reads the address and the name list off the patch set. If
-    // the generator stopped carrying them, the screen would say "not in this patch
-    // set" and look like a device problem instead of a build one.
-    check('app: the patch set carries the lab address and the names it answers for',
-      patchSet.lab.advertiseIp === FAKE_LAN_IP
-        && Array.isArray(patchSet.lab.hosts)
-        && patchSet.lab.hosts.length === testHosts.length
-        && patchSet.lab.hosts[0] === testHosts[0],
-      `ip=${patchSet.lab.advertiseIp} hosts=${JSON.stringify(patchSet.lab.hosts)}`);
-
-    // The phone cannot write the certificate store itself (measured: the runtime
-    // refuses native calls from app code), so its job is to hand the phone's own
-    // console a file to import. It must hand over the file generated here, byte for
-    // byte: a .reg formatted on the device would be a second implementation of the
-    // format, and therefore a second chance to drift from what was verified.
-    const expectedRegFile = buildRegFileBuffer({ der: caDer });
-    const carriedRegFile = Buffer.from(patch.regFileBase64 || '', 'base64');
-    check('app: the patch set carries the .reg install file byte for byte',
-      carriedRegFile.equals(expectedRegFile) && carriedRegFile.length > 0,
-      `carried=${carriedRegFile.length} bytes, expected=${expectedRegFile.length} bytes`);
 
     // Two independent readings of the same file: it has to be the encoding reg.exe
     // accepts at all (UTF-16LE with a BOM), and its hex payload has to decode back
     // to the blob the desktop side proved against Windows.
-    const regText = carriedRegFile.toString('utf16le', 2);
-    const keyLine = `[${patch.hive}\\SOFTWARE\\Microsoft\\SystemCertificates\\${patch.store}\\Certificates\\${expectedThumbprint}]`;
-    check('app: the .reg is UTF-16LE with a BOM and names the registry key to create',
-      carriedRegFile[0] === 0xff && carriedRegFile[1] === 0xfe
+    const desktopRegFile = buildRegFileBuffer({ der: caDer });
+    const regText = desktopRegFile.toString('utf16le', 2);
+    const keyLine = `[HKLM\\SOFTWARE\\Microsoft\\SystemCertificates\\Root\\Certificates\\${expectedThumbprint}]`;
+    check('mass storage: the .reg is UTF-16LE with a BOM and names the registry key to create',
+      desktopRegFile[0] === 0xff && desktopRegFile[1] === 0xfe
         && regText.startsWith('Windows Registry Editor Version 5.00')
         && regText.includes(keyLine),
-      `first bytes=${carriedRegFile.subarray(0, 2).toString('hex')}, key present=${regText.includes(keyLine)}`);
+      `first bytes=${desktopRegFile.subarray(0, 2).toString('hex')}, key present=${regText.includes(keyLine)}`);
+
+    // The mass storage route loads the phone's own SOFTWARE hive on this PC, and that
+    // hive's root *is* `SOFTWARE`. A path that repeated the component would create a
+    // `SOFTWARE\SOFTWARE\...` tree the phone never reads: the certificate would be in
+    // the file, the import would report success, and the CA would still not be trusted.
+    // The two files must therefore differ by exactly that one prefix and nothing else -
+    // same blob, same line wrapping, same encoding.
+    const mountedEntry = buildRegEntry({ der: caDer, mount: 'HKLM\\PhoneSoftware' });
+    const mountedText = buildRegFileBuffer({ der: caDer, mount: 'HKLM\\PhoneSoftware' }).toString('utf16le', 2);
+    check('mass storage: the .reg aims at the loaded hive and repeats nothing else',
+      mountedEntry.keyPath === `HKLM\\PhoneSoftware\\Microsoft\\SystemCertificates\\Root\\Certificates\\${expectedThumbprint}`
+        && mountedEntry.blob.equals(buildCertBlob(caDer))
+        && mountedText === regText.replace('HKLM\\SOFTWARE\\', 'HKLM\\PhoneSoftware\\'),
+      `key=${mountedEntry.keyPath}`);
+
+    // The mass storage route does not write the desktop's blob: it writes the shape
+    // the phone itself writes, which was read off the device's own entries. If this
+    // drifts, the entry goes into the phone's store and the phone silently keeps not
+    // trusting the CA - the exact failure the whole arrangement exists to prevent.
+    const phoneBlob = buildPhoneCertBlob(caDer);
+    const readElement = (buffer) => {
+      const element = {
+        version: buffer.readUInt32LE(0),
+        one: buffer.readUInt32LE(4),
+        idLength: buffer.readUInt32LE(8),
+        id: buffer.subarray(12, 12 + buffer.readUInt32LE(8)),
+        properties: [],
+      };
+      let off = 12 + element.idLength;
+      while (off + 12 <= buffer.length) {
+        const propId = buffer.readUInt32LE(off);
+        const flag = buffer.readUInt32LE(off + 4);
+        const length = buffer.readUInt32LE(off + 8);
+        element.properties.push({ propId, flag, data: buffer.subarray(off + 12, off + 12 + length) });
+        off += 12 + length;
+      }
+      element.consumed = off;
+      return element;
+    };
+    const element = readElement(phoneBlob);
+    const sha1Prop = element.properties.find((p) => p.propId === 3);
+    const certProp = element.properties.find((p) => p.propId === 32);
+    check('mass storage: the entry is the shape the phone itself stores',
+      element.version === PHONE_ELEMENT_VERSION && element.version === 25
+        && element.one === 1 && element.idLength === 16 && element.id.length === 16
+        && element.properties.length === 2
+        && element.properties.every((p) => p.flag === 1)
+        && element.consumed === phoneBlob.length,
+      `version=${element.version} idLength=${element.idLength} props=${element.properties.map((p) => p.propId).join(',')} consumed=${element.consumed}/${phoneBlob.length}`);
+    check('mass storage: it carries the SHA-1 of the certificate and the certificate',
+      Boolean(sha1Prop) && Boolean(certProp)
+        && sha1Prop.data.toString('hex').toUpperCase() === expectedThumbprint
+        && certProp.data.equals(caDer),
+      `sha1=${sha1Prop ? sha1Prop.data.length : 0} bytes, cert=${certProp ? certProp.data.length : 0} bytes`);
+    check('mass storage: the same CA always produces the same entry',
+      buildPhoneCertBlob(caDer).equals(phoneBlob)
+        && !phoneElementId(caDer).equals(phoneElementId(Buffer.concat([caDer, Buffer.from([0])]))),
+      `elementId=${phoneElementId(caDer).toString('hex')}`);
 
     const decodedBlob = Buffer.from(
       regText.slice(regText.indexOf('"Blob"=hex:') + 11).replace(/[^0-9a-fA-F]/g, ''),
       'hex',
     );
-    check('app: the .reg payload decodes to the blob the desktop verified',
+    check('mass storage: the .reg payload decodes to the blob the desktop verified',
       decodedBlob.equals(buildCertBlob(caDer)),
       `decoded=${decodedBlob.length} bytes, verified=${buildCertBlob(caDer).length} bytes`);
 
-    // The runbook prints the path this app's isolated storage lives at, and the app
-    // has no API for it on the device. It comes from the manifest at generation time,
-    // so a wrong value here would send the operator to a path that does not exist.
-    check('app: the .reg file name travels with the patch set',
-      patch.regFileName === REG_FILE_NAME,
-      `regFileName=${patch.regFileName}`);
-    check('app: the product id for the runbook is read from the app manifest',
-      /^\{[0-9a-fA-F-]{36}\}$/.test(productId()),
-      `productId=${productId()}`);
-    check('app: the patch set records the product id it was generated for',
-      patchSet.app.productId === '{00000000-0000-0000-0000-0000000000aa}',
-      `app.productId=${patchSet.app.productId}`);
-
-    // The picker on the phone compares authorities by their bytes, and the operator
-    // compares them by thumbprint. Both readings have to agree with what the desktop
-    // pushes, including when the file on disk is PEM rather than DER - which is the
-    // form people actually have.
-    const pushedFromPem = readCertificateDer(path.join(config.pki.dir, 'ca.crt'));
-    const pushedFromDer = readCertificateDer(path.join(config.pki.dir, 'ca.der'));
-    check('app: a pushed CA is read identically from PEM and from DER',
-      pushedFromPem.equals(caDer) && pushedFromDer.equals(caDer),
-      `pem=${pushedFromPem.length} bytes, der=${pushedFromDer.length} bytes, ca=${caDer.length} bytes`);
-    check('app: a pushed CA carries the same thumbprint as the patch set',
-      crypto.createHash('sha1').update(pushedFromPem).digest('hex').toUpperCase() === expectedThumbprint,
-      `thumbprint=${expectedThumbprint}`);
-
-    // A file that is not a certificate must be refused here, not uploaded and then
-    // shown on the phone as an unreadable entry.
-    const notACertificate = path.join(WORK, 'not-a-certificate.txt');
-    await fsp.writeFile(notACertificate, 'this is not a certificate\n');
-    let refusal = null;
-    try {
-      readCertificateDer(notACertificate);
-    } catch (err) {
-      refusal = err.message;
-    }
-    check('app: push-ca refuses a file that is not a certificate',
-      Boolean(refusal) && /neither DER \(does not start with 0x30\) nor a PEM/.test(refusal),
-      refusal ? refusal.slice(0, 90) : 'accepted the file');
-
-    const probeZip = makeStoredZip('WMAppManifest.xml', `<Capability Name="${CAPABILITY}"/>`);
-    const zipEntries = readZipEntries(probeZip);
-    check('app: the XAP reader reads an entry out of a zip',
-      zipEntries.length === 1 && zipEntries[0].name === 'WMAppManifest.xml'
-        && zipEntry(probeZip, 'WMAppManifest.xml').data.toString('utf8').includes(CAPABILITY),
-      `entries=${zipEntries.map((e) => e.name).join(',')}`);
-    check('app: the XAP reader reports a missing entry as missing',
-      zipEntry(probeZip, 'patches.json') === null,
-      'asked for patches.json, which the test zip does not contain');
   } finally {
     await proxy.stop();
     await dns.stop();

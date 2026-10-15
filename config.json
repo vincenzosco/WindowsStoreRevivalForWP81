@@ -16,6 +16,7 @@
       "_comment": "Names matching these globs resolve to advertiseIp instead of the real address. Start narrow: only what the capture proves is Store traffic.",
       "ip": "auto",
       "_comment_hosts": "The marketplace image/content hosts come from Microsoft partners' own firewall guidance for Windows 8.1 store access, which names them alongside marketplaceedgeservice.",
+      "_comment_account": "The hosts below are a DIAGNOSTIC, not part of the store names. They are here because a request to a host this lab does not own is never captured - it is either tunnelled or it simply leaves - and the DNS log shows the phone asking for exactly these names right after it fetches a store page. Redirecting them makes that traffic readable: what the device asks for, on which path, in what order, with which headers. The cost is stated plainly and is real: traffic to these names TERMINATES here and cannot succeed while they are listed, which is a NEW failure mode on top of the one being investigated, and the CA has to be trusted on the device for the same reason. Two groups: login.live.com / clientconfig.passport.net / go.microsoft.com (the Live account stack, asked once at 15:37 and NOT again at 15:48 - so it may have been a periodic account sync rather than the Store), and account.nokia.com / az717532.vo.msecnd.net / ssl-api.bing.com (asked at 15:48-15:49, in the same second as the page and shortly after: a Nokia account service, an Azure CDN subdomain, and a Bing API host the Store may read for search or artwork). Remove the lines to put each name back on the real path.",
       "names": [
         "wscont1.apps.microsoft.com",
         "wscont2.apps.microsoft.com",
@@ -25,7 +26,13 @@
         "marketplaceedgeservice.windowsphone.com",
         "*.marketplaceedgeservice.windowsphone.com",
         "*.marketplaceimages.windowsphone.com",
-        "*.marketplacecontent.windowsphone.com"
+        "*.marketplacecontent.windowsphone.com",
+        "login.live.com",
+        "clientconfig.passport.net",
+        "go.microsoft.com",
+        "account.nokia.com",
+        "az717532.vo.msecnd.net",
+        "ssl-api.bing.com"
       ]
     },
     "logQueries": true
@@ -42,6 +49,7 @@
     "httpPort": 80,
     "mitm": {
       "_comment": "Only these hosts are TLS-intercepted. Every other host is tunnelled byte-for-byte and never decrypted, so unrelated device traffic is untouched.",
+      "_comment_account": "The six hosts at the end of this list are the diagnostic group, and they are here for the same reason they are in the hijack list: without interception their traffic is a tunnel and the capture shows only that it happened, not what was asked. See dns.hijack._comment_account for what this costs and which group each name belongs to.",
       "mode": "listed",
       "hosts": [
         "wscont1.apps.microsoft.com",
@@ -52,7 +60,13 @@
         "marketplaceedgeservice.windowsphone.com",
         "*.marketplaceedgeservice.windowsphone.com",
         "*.marketplaceimages.windowsphone.com",
-        "*.marketplacecontent.windowsphone.com"
+        "*.marketplacecontent.windowsphone.com",
+        "login.live.com",
+        "clientconfig.passport.net",
+        "go.microsoft.com",
+        "account.nokia.com",
+        "az717532.vo.msecnd.net",
+        "ssl-api.bing.com"
       ]
     },
     "tunnel": {
@@ -85,7 +99,26 @@
     "_comment": "Zinc API (Live Store Public API). Get a key from the One Live Developer Centre, app for the Live Store realm.",
     "baseUrl": "https://zinc.onelive.me/v1",
     "apiKey": "",
-    "cacheTtlMs": 300000
+    "cacheTtlMs": 300000,
+
+    "_comment_protocol": "Answers the Store endpoints the phone itself calls (the storePages home page, the hub pages, the application lists) with the Zune catalog XML it reads. The backend behind those names is gone - the CDN answers 503 and the other hosts do not resolve - so the page has to be served, not relayed.",
+    "protocol": {
+      "_comment": "catalogFile is read relative to this folder and re-read when it changes, so dropping in a real catalog does not need a restart. demo-catalog.json is a fake store of invented apps - enough sections to see what the page renders; every entry is invented and every publisher says Lab Fixture. sample-catalog.json is the three-entry fixture the tests use as a baseline.",
+      "enabled": true,
+      "catalogFile": "src/store/fixtures/demo-catalog.json",
+      "_comment_hubTemplate": "The layout the page asks the client to render it with, read from the phone rather than guessed. The phone's own Store UI names this style: ZuneAssets480x800.dll carries Store_DynamicHubStyle_TitleMargins, Store_DynamicHubStyle_TitleStyle_FontSize and Store_DynamicHubStyle_VScrollContentMargins. See src/store/vocabulary.mjs for the offsets.",
+      "hubTemplate": "DynamicHub",
+      "_comment_templateType": "The template type a store page is rendered with, and it is a NUMBER, not a name: the phone's UI assets style exactly Store_Hub_TemplateType003, 004, 015 and 017 for a hub page, and Store_Chart_TemplateType010 for a chart. 003 is the plain ordered list, which is what a generated section is. A name here - 'DynamicHub', or the 'GamesHub' of the archived page - is a token this phone cannot style.",
+      "templateType": "003",
+      "_comment_templateTypeForm": "Whether the type key travels as an attribute of <Template> or as a child element. The parser holds it as a property name, not as markup, so nothing on the phone decides it; 'both' writes it either way. One of: attribute, element, both.",
+      "templateTypeForm": "both",
+      "_comment_pageFormat": "The document the page endpoint answers with. 'storePage' is the grammar the phone's own parser describes: a StorePage root carrying Panes, Templates and the entries, where a pane names its section and the items are in the feed underneath. 'panes' is that same document with each pane ALSO carrying its own editorialItems and applications - the arrangement of the archived response, where the entry a pane points at holds its items inline, so the client is never asked to resolve a reference to content it has already been sent. 'atom' is the older <a:feed> shape that archived responses and the app-detail feeds use. Every page the lab served before 'storePage' was 'atom', and the phone asserted on all of them. One of: storePage, panes, atom. Currently 'panes': that variant is armed for a run, because it is the one arrangement the phone has not been shown - it has met 'storePage' many times and asserted on it every time. Set it back to 'storePage' and POST /__lab/reload to un-arm it.",
+      "pageFormat": "panes",
+      "pageSize": 25,
+      "_comment_serve": "'generated' builds the page from the catalog. 'archive' serves a response of the real service byte for byte instead. It is NOT a one-variable change, and the header x-lab-archive-warning says why: that archived response is the games hub page of a different client generation, so it carries a template (GamesHub) and a page type this Store client does not own.",
+      "serve": "generated",
+      "archiveFile": "src/store/fixtures/archive/real-hub-page-20130813.xml"
+    }
   },
 
   "rules": []

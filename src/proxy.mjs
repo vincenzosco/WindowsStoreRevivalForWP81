@@ -11,6 +11,7 @@
 // A local admin surface is served at /__lab/ so the operator can watch traffic,
 // fetch the CA and hot-reload rules while the device stays connected.
 
+import dns from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
@@ -171,7 +172,7 @@ export class MitmProxy {
     this.startedAt = Date.now();
     this.stats = {
       connect: 0, mitm: 0, tunnel: 0, requests: 0, mock: 0, passthrough: 0,
-      rewrite: 0, redirect: 0, block: 0, upstreamErrors: 0, tunnelBytes: 0,
+      rewrite: 0, redirect: 0, block: 0, upstreamErrors: 0, upstreamLoops: 0, tunnelBytes: 0,
       // Direct (DNS-only) path counters. Kept separate from `mitm` so a device
       // that merely reaches the port is never counted as successfully intercepted.
       directTcp: 0, directHandshakeErrors: 0, directNoSni: 0, directRejected: 0, directTls: 0,
@@ -644,15 +645,20 @@ export class MitmProxy {
     } catch (err) {
       error = err.message;
       this.stats.upstreamErrors += 1;
-      this.log.error(`upstream failure for ${req.method} ${scheme}://${host}${requestPath}: ${err.message}`);
+      if (err.loopDetected) this.stats.upstreamLoops += 1;
+      this.log[err.loopDetected ? 'warn' : 'error'](
+        `${err.loopDetected ? 'upstream loop refused' : 'upstream failure'} for ${req.method} ${scheme}://${host}${requestPath}: ${err.message}`,
+      );
       response = {
         status: 502,
         headers: { 'content-type': 'application/json; charset=utf-8' },
         body: Buffer.from(JSON.stringify({
-          error: 'upstream_unreachable',
+          error: err.loopDetected ? 'upstream_loop' : 'upstream_unreachable',
           target: `${scheme}://${host}${requestPath}`,
           detail: err.message,
-          hint: 'No rule handled this request and the real backend could not be reached.',
+          hint: err.loopDetected
+            ? "This host resolves to the lab itself, so forwarding it upstream would call back into the lab. Point this PC's DNS back at the router (the device keeps using the lab), or add a rule that answers this host."
+            : 'No rule handled this request and the real backend could not be reached.',
         }, null, 2)),
       };
     }
@@ -775,7 +781,52 @@ export class MitmProxy {
     });
   }
 
-  #fetchUpstream({ scheme, host, port, method, path: requestPath, headers, body }) {
+  /**
+   * Would forwarding this request upstream call straight back into the lab?
+   *
+   * The device is told to use the lab as its DNS, but the operator's PC can be
+   * pointed at the lab too - and then a hijacked name resolves, *on this PC*, to
+   * the lab's own address. Forwarding "upstream" dials the lab again: each hop
+   * waits on the hop below it, nothing ever answers, and the capture log fills
+   * with the lab's own traffic, which looks exactly like a device that never
+   * arrived.
+   *
+   * Resolved before the socket exists so the loop is refused immediately rather
+   * than after a full upstream timeout. Ports are checked as well, because
+   * talking to some other service on this machine is legitimate.
+   *
+   * @returns {Promise<string|null>} the local address it would hit, or null.
+   */
+  async #wouldLoopBack(host, port) {
+    const ownPorts = new Set([
+      this.config.dns.port,
+      this.config.proxy.port,
+      this.config.proxy.httpPort,
+      this.config.proxy.tlsPort,
+    ]);
+    if (!ownPorts.has(Number(port))) return null;
+    if (net.isIP(host) !== 0) return isLocalAddress(host) ? host : null;
+
+    let addresses;
+    try {
+      addresses = await dns.lookup(host, { all: true, verbatim: true });
+    } catch {
+      return null; // unresolvable: let the real request report that instead
+    }
+    const hit = addresses.find((entry) => isLocalAddress(entry.address));
+    return hit ? hit.address : null;
+  }
+
+  async #fetchUpstream({ scheme, host, port, method, path: requestPath, headers, body }) {
+    const loop = await this.#wouldLoopBack(host, port);
+    if (loop) {
+      const err = new Error(
+        `${host} resolves to ${loop}:${port}, which is this lab itself; refusing to forward to it`,
+      );
+      err.loopDetected = true;
+      throw err;
+    }
+
     return new Promise((resolve, reject) => {
       const isHttps = scheme === 'https';
       const transport = isHttps ? https : http;

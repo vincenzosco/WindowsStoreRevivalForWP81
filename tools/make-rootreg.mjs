@@ -20,7 +20,16 @@
 //   node tools/make-rootreg.mjs                       # writes ca/install-root-ca.reg
 //   node tools/make-rootreg.mjs --verify              # proves the layout round-trips
 //   node tools/make-rootreg.mjs --hive HKLM --out x.reg
+//   node tools/make-rootreg.mjs --mount 'HKLM\PhoneSoftware'   # mass storage route
+//   node tools/make-rootreg.mjs --phone               # the Blob bytes + command for mass storage
 //
+// The `--mount` form exists for the PC route: the phone's own SOFTWARE hive is
+// loaded into the local registry under a made-up name (`reg load HKLM\PhoneSoftware
+// G:\Windows\System32\config\SOFTWARE`), and that hive's root *is* `SOFTWARE`, so
+// the key path must not repeat the `SOFTWARE` component. Generating this second
+// file from the same builder, instead of hand-editing the first one, keeps the blob
+// and the key path in one implementation.
+
 // --verify imports the certificate into a throw-away per-user store with
 // certutil, reads the blob Windows produced, compares it with ours, then removes
 // the store. A pass means the blob we generate is byte-identical to Windows'.
@@ -40,6 +49,13 @@ const BLOB_HEADER = 3;
 const BLOB_PROPERTY_SET = 1;
 const BLOB_CONSTANT = 0x20;
 const BLOB_CERT_PROPERTY_ID = 1;
+
+/** Version word of every store entry this phone writes, read off the device itself. */
+export const PHONE_ELEMENT_VERSION = 0x19;
+
+/** Property ids the phone's own entries use. */
+const PROP_SHA1_HASH = 3;
+const PROP_CERTIFICATE = 32;
 
 /**
  * Build the REG_BINARY "Blob" value for a DER certificate.
@@ -66,6 +82,74 @@ export function sha1Thumbprint(der) {
   return crypto.createHash('sha1').update(der).digest('hex').toUpperCase();
 }
 
+/**
+ * Stable 16-byte element id.
+ *
+ * The ids inside the phone's own entries are not derivable from the certificate -
+ * checked against MD5, SHA-1 and the thumbprint of the entries that are on the device
+ * - so any unique value does. Deriving it from the certificate instead of randomising
+ * it keeps the generator deterministic: the same CA has to produce the same bytes
+ * today and tomorrow, or nothing here can be compared with anything.
+ */
+export function phoneElementId(der) {
+  return crypto.createHash('md5').update(der).digest();
+}
+
+/**
+ * A store entry in the shape *this phone* writes, measured on its own entries.
+ *
+ * Every entry in every store of the device is a serialized store element:
+ *
+ *   DWORD 0x19 (25)   version - the same on all 26 entries read off the device
+ *   DWORD 1
+ *   DWORD 16          length of the element id that follows
+ *   BYTE  id[16]
+ *   then a list of properties, each: DWORD id, DWORD 1, DWORD length, BYTE data[]
+ *
+ * The desktop's entries (what `npm run verify-rootreg` proves) use the same grammar
+ * with version 3 and one property, and crypt32 on this PC deserializes both back to
+ * the byte-identical certificate. That is not the question the phone asks, though:
+ * the phone is written the shape the phone itself writes, because that is the only
+ * shape it is known to read.
+ *
+ * Two properties, both measured rather than invented:
+ *   3   the SHA-1 of the certificate - in every entry on the device it equals the key name
+ *   32  the certificate itself
+ *
+ * The phone's entries carry more (a subject-name hash, key identifier, friendly name,
+ * EKU). They are deliberately not written: the same property id was found to hold 16
+ * bytes in one store and 20 in another, and a value that is wrong is worse than a
+ * property that is absent, because crypt32 computes the missing ones on demand.
+ *
+ * @param {Buffer} der
+ * @param {{ elementId?: Buffer }} [options]
+ * @returns {Buffer}
+ */
+export function buildPhoneCertBlob(der, { elementId = phoneElementId(der) } = {}) {
+  const id = Buffer.from(elementId);
+  if (id.length !== 16) throw new Error(`the element id must be 16 bytes, got ${id.length}`);
+
+  const head = Buffer.alloc(12);
+  head.writeUInt32LE(PHONE_ELEMENT_VERSION, 0);
+  head.writeUInt32LE(BLOB_PROPERTY_SET, 4);
+  head.writeUInt32LE(id.length, 8);
+
+  const property = (propId, data) => {
+    const header = Buffer.alloc(12);
+    header.writeUInt32LE(propId, 0);
+    header.writeUInt32LE(1, 4);
+    header.writeUInt32LE(data.length, 8);
+    return Buffer.concat([header, data]);
+  };
+
+  return Buffer.concat([
+    head,
+    id,
+    property(PROP_SHA1_HASH, crypto.createHash('sha1').update(der).digest()),
+    property(PROP_CERTIFICATE, Buffer.from(der)),
+  ]);
+}
+
 /** Render a REG_BINARY value body the way reg.exe does, with line continuations. */
 function hexValueBody(buffer, indent = '') {
   const pairs = [];
@@ -82,12 +166,18 @@ function hexValueBody(buffer, indent = '') {
 
 /**
  * Build a .reg file body (UTF-16LE at write time) that creates the trusted-root entry.
+ *
+ * @param {{ der: Buffer, hive?: string, store?: string, mount?: string|null }} options
+ *   `mount` is the name a loaded phone hive is attached to on this PC; when it is set
+ *   the key is rooted there instead of under `<hive>\SOFTWARE`.
  * @returns {{text: string, keyPath: string, thumbprint: string, blob: Buffer}}
  */
-export function buildRegEntry({ der, hive = 'HKLM', store = 'Root' }) {
+export function buildRegEntry({ der, hive = 'HKLM', store = 'Root', mount = null }) {
   const thumbprint = sha1Thumbprint(der);
   const blob = buildCertBlob(der);
-  const keyPath = `${hive}\\SOFTWARE\\Microsoft\\SystemCertificates\\${store}\\Certificates\\${thumbprint}`;
+  const keyPath = mount
+    ? `${mount}\\Microsoft\\SystemCertificates\\${store}\\Certificates\\${thumbprint}`
+    : `${hive}\\SOFTWARE\\Microsoft\\SystemCertificates\\${store}\\Certificates\\${thumbprint}`;
 
   const text = [
     'Windows Registry Editor Version 5.00',
@@ -103,15 +193,15 @@ export function buildRegEntry({ der, hive = 'HKLM', store = 'Root' }) {
 /**
  * The exact bytes of the .reg file reg.exe and regedit accept: UTF-16LE with a BOM.
  *
- * Exported because the app carries this file verbatim in its patch set. The phone
- * then writes the bytes generated and verified here instead of formatting a .reg of
- * its own, which is the same reason the REG_BINARY blob travels pre-built: a second
- * implementation of the format is a second chance to drift.
+ * Exported so a caller can hand the phone the bytes generated and verified here
+ * instead of formatting a .reg of its own, which is the same reason the REG_BINARY
+ * blob is built rather than pasted: a second implementation of the format is a
+ * second chance to drift from what was measured.
  *
  * @returns {Buffer}
  */
-export function buildRegFileBuffer({ der, hive = 'HKLM', store = 'Root' }) {
-  const entry = buildRegEntry({ der, hive, store });
+export function buildRegFileBuffer({ der, hive = 'HKLM', store = 'Root', mount = null }) {
+  const entry = buildRegEntry({ der, hive, store, mount });
   return Buffer.concat([
     Buffer.from([0xff, 0xfe]),
     Buffer.from(entry.text, 'utf16le'),
@@ -173,7 +263,11 @@ if (isMainModule(import.meta.url)) {
 
   const hive = flag('hive', 'HKLM');
   const store = flag('store', 'Root');
-  const out = path.resolve(flag('out', path.join(ROOT, 'ca/install-root-ca.reg')));
+  const mount = flag('mount', null);
+  const out = path.resolve(flag('out', path.join(
+    ROOT,
+    mount ? 'ca/install-root-ca.mounted.reg' : 'ca/install-root-ca.reg',
+  )));
   const derPath = path.resolve(flag('der', path.join(ROOT, 'ca/ca.der')));
 
   if (!fs.existsSync(derPath)) {
@@ -182,8 +276,40 @@ if (isMainModule(import.meta.url)) {
   }
 
   const der = fs.readFileSync(derPath);
-  const entry = buildRegEntry({ der, hive, store });
-  const file = buildRegFileBuffer({ der, hive, store });
+
+  // The mass storage route does not import a .reg at all: it writes the Blob value
+  // into the hive of the phone the PC has mounted. What travels is the value's bytes,
+  // in the shape the phone itself writes, plus the one command that puts them there.
+  if (args.includes('--phone')) {
+    const phoneMount = flag('mount', 'HKLM\\PhoneSoftware');
+    const hexPath = path.resolve(flag('out', path.join(ROOT, 'ca/install-root-ca.phone.hex')));
+    const blob = buildPhoneCertBlob(der);
+    const hex = blob.toString('hex');
+    const thumbprint = sha1Thumbprint(der);
+    const key = `${phoneMount}\\Microsoft\\SystemCertificates\\${store}\\Certificates\\${thumbprint}`;
+
+    fs.writeFileSync(hexPath, `${hex}\n`);
+
+    console.log(`wrote ${hexPath}`);
+    console.log(`  element version : ${PHONE_ELEMENT_VERSION} (0x${PHONE_ELEMENT_VERSION.toString(16)}), as in every entry on this phone`);
+    console.log(`  element bytes   : ${blob.length}`);
+    console.log(`  sha1 thumbprint : ${thumbprint}`);
+    console.log(`  registry key    : ${key}`);
+    console.log('');
+    console.log('With the phone in mass storage mode, from an elevated prompt:');
+    console.log('');
+    console.log(`  1. reg load    "${phoneMount}" "G:\\Windows\\System32\\config\\SOFTWARE"`);
+    console.log(`  2. reg add     "${key}" /v Blob /t REG_BINARY /d ${hex} /f`);
+    console.log(`  3. reg query   "${key}" /v Blob`);
+    console.log(`  4. reg unload  "${phoneMount}"`);
+    console.log('');
+    console.log('Details, the copy-back step and the rollback are in README.md, section');
+    console.log('"Mass storage mode".');
+    process.exit(0);
+  }
+
+  const entry = buildRegEntry({ der, hive, store, mount });
+  const file = buildRegFileBuffer({ der, hive, store, mount });
 
   fs.writeFileSync(out, file);
 
@@ -192,6 +318,25 @@ if (isMainModule(import.meta.url)) {
   console.log(`  thumbprint   : ${entry.thumbprint}`);
   console.log(`  blob bytes   : ${entry.blob.length}`);
   console.log('');
-  console.log('Install on the device with WPinternals: mount the phone registry (or use');
-  console.log('its registry editor) and import this file into the phone, then reboot it.');
+
+  if (mount) {
+    // The mass storage route: the phone's filesystem is mounted as a drive and its
+    // SOFTWARE hive is attached to the local registry. Everything here runs on the
+    // PC, which is why the phone does not need to be unlocked or even booted.
+    const drive = flag('drive', 'G:');
+    console.log('Install with the phone in mass storage mode (filesystem visible as a drive):');
+    console.log('');
+    console.log(`  1. reg load    "${mount}" "${drive}\\Windows\\System32\\config\\SOFTWARE"`);
+    console.log(`  2. reg import  "${out}"`);
+    console.log(`  3. reg query   "${entry.keyPath}" /v Blob     <- must print the blob`);
+    console.log(`  4. reg unload  "${mount}"`);
+    console.log('');
+    console.log('Steps 1-4 need an elevated prompt, and the phone has to be rebooted');
+    console.log('afterwards for the certificate store to be read again.');
+  } else {
+    console.log('Install on the device with WPinternals: mount the phone registry (or use');
+    console.log('its registry editor) and import this file into the phone, then reboot it.');
+    console.log('For the mass storage route (hive loaded on this PC) use --mount instead:');
+    console.log('  node tools/make-rootreg.mjs --mount "HKLM\\\\PhoneSoftware"');
+  }
 }

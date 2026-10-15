@@ -17,7 +17,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { matchesAny } from '../config.mjs';
+import { isInterceptedHost } from '../config.mjs';
+import { createStoreProtocol } from './protocol.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.join(HERE, 'fixtures', 'sample-catalog.json');
@@ -33,12 +34,6 @@ function jsonResponse(payload, status = 200, extraHeaders = {}) {
     },
     body,
   };
-}
-
-/** Hosts the lab is configured to intercept - the only hosts a handler may answer for. */
-function isInterceptedHost(host, config) {
-  if (config.proxy.mitm.mode === 'all') return true;
-  return matchesAny(host, config.proxy.mitm.hosts);
 }
 
 function bridgeSettings(config) {
@@ -86,7 +81,7 @@ export function createCatalogBridge(config) {
     async handle(ctx, { zinc, logger }) {
       const settings = bridgeSettings(config);
 
-      if (!isInterceptedHost(ctx.host, config)) {
+      if (!isInterceptedHost(config, ctx.host)) {
         return jsonResponse({ error: 'host_not_intercepted', host: ctx.host }, 421);
       }
       if (ctx.method !== 'GET') {
@@ -170,7 +165,7 @@ export function createStoreHealth(config) {
     },
 
     async handle(ctx) {
-      if (!isInterceptedHost(ctx.host, config)) {
+      if (!isInterceptedHost(config, ctx.host)) {
         return jsonResponse({ error: 'host_not_intercepted', host: ctx.host }, 421);
       }
       return jsonResponse({
@@ -188,5 +183,5 @@ export function createStoreHealth(config) {
 
 /** Handler list in priority order. */
 export function buildHandlers(config) {
-  return [createStoreHealth(config), createCatalogBridge(config)];
+  return [createStoreHealth(config), createStoreProtocol(config), createCatalogBridge(config)];
 }

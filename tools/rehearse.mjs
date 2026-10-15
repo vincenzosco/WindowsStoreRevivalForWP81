@@ -24,7 +24,12 @@ import net from 'node:net';
 import tls from 'node:tls';
 import path from 'node:path';
 import { loadConfig } from '../src/config.mjs';
+import { countJsonl } from '../src/capture.mjs';
 import { query } from './dnsprobe.mjs';
+import {
+  PAGE_TYPES, TEMPLATE_GRAMMAR, checkTemplateType, isKnownPageType,
+  templateTypesForPageType, whyNotATemplate,
+} from '../src/store/vocabulary.mjs';
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
@@ -144,18 +149,21 @@ function tcpReachable(host, port) {
   });
 }
 
-function latestCaptureCount() {
+async function latestCaptureCount() {
   if (!fs.existsSync(captureRoot)) return 0;
   const sessions = fs.readdirSync(captureRoot).filter((n) => n.startsWith('session-')).sort();
   if (!sessions.length) return 0;
   const indexPath = path.join(captureRoot, sessions[sessions.length - 1], 'index.jsonl');
-  try { return fs.readFileSync(indexPath, 'utf8').split('\n').filter(Boolean).length; } catch { return 0; }
+  // Never read the whole index into a string: past Node's maximum string length
+  // that throws, and swallowing it reported "0 captured" for a session that had
+  // thousands of exchanges.
+  try { return await countJsonl(indexPath); } catch { return 0; }
 }
 
 console.log(`rehearsal against proxy ${proxyHost}:${proxyPort} and DNS ${dnsHost}:${dnsPort}`);
 console.log(`CA: ${path.resolve(config.pki.dir, 'ca.crt')}\n`);
 
-const before = latestCaptureCount();
+const before = await latestCaptureCount();
 const hosts = targetHosts();
 
 if (hosts.length === 0) {
@@ -264,6 +272,171 @@ try {
   check(`handler answers on ${healthHost}`, false, err.message);
 }
 
+// The endpoint the phone's own Store opens with, on the name the capture shows it
+// asking. This is the one that decides whether the Store opens at all, so the
+// deployment rehearsal asks it too - not only the self-test.
+console.log('--- store protocol');
+if (config.livestore?.protocol?.enabled) {
+  const storeHost = 'cdn.marketplaceedgeservice.windowsphone.com';
+  // The query the capture shows the phone sending when it opens the Store: the
+  // page type it names, its OS, its locale and the handset identifiers it adds on
+  // the second, real request. Rehearsed verbatim rather than approximated.
+  const storeQuery = '/v9/catalog/storePages?typeId=DynamicHub.Main&os=8.10.14219.0&cc=IT&lang=it-IT'
+    + '&hw=402699266&dm=RM-941_eu_france_308&oemId=NOKIA&moId=&cf=&optedOut=true';
+  const requestedTypeId = (new URL(storeQuery, 'http://x').searchParams.get('typeId') || '');
+  const requestedPageType = requestedTypeId.split('.')[0];
+  check(`the page type the phone asks for is one the client names`,
+    isKnownPageType(requestedPageType),
+    `typeId=${requestedTypeId} known=[${PAGE_TYPES.map((p) => p.id).join(',')}]`);
+  try {
+    const session = await connectThroughProxy({ targetHost: storeHost, targetPort: 443 });
+    const response = await rawRequest(session.secureSocket, {
+      method: 'GET', requestPath: storeQuery, host: storeHost,
+    });
+    session.secureSocket.destroy();
+    const template = (response.body.match(/<templateName>([^<]*)<\/templateName>/) || [])[1];
+    const items = (response.body.match(/<editorialItem>/g) || []).length;
+    // 'storePages' when the page is built from the catalog, 'storePages:archive'
+    // when it is the archived response. Both are a page served; the label is what
+    // says which, so the rehearsal accepts either and prints it.
+    const label = response.headers['x-lab-protocol'] || '';
+    check(`${storeHost} serves a Store home page`,
+      response.status === 200
+        && response.headers['content-type'] === 'application/atom+xml; charset=utf-8'
+        && label.startsWith('storePages')
+        && response.body.includes('http://schemas.zune.net/catalog/apps/2008/02'),
+      `status=${response.status} template=${template} items=${items} label=${label}`);
+
+    // The check the whole vocabulary exists for: a page can be well-formed and
+    // still name a layout this device has never heard of, which is a rejection
+    // that looks exactly like a bad page. When the served page is generated, its
+    // template type is held to the set the phone's own UI assets style. When it is
+    // the archived page, that check cannot apply - the archive is a different page
+    // from a different generation - so what is asserted instead is that the lab
+    // *says so* in the headers, and the confound is printed rather than assumed
+    // away.
+    if (label === 'storePages') {
+      const typeKey = (response.body.match(new RegExp(`<${TEMPLATE_GRAMMAR.typeKey}>([^<]*)<`)) || [])[1]
+        || (response.body.match(new RegExp(`${TEMPLATE_GRAMMAR.typeKey}="([^"]*)"`)) || [])[1];
+      const verdict = checkTemplateType(requestedPageType, typeKey);
+      check(`the served page names a template type the phone styles`,
+        verdict.ok,
+        verdict.ok
+          ? `type=${typeKey} styled=[${templateTypesForPageType(requestedPageType).join(',')}]`
+          : `${verdict.reason} (served type=${typeKey})`);
+      const rejected = whyNotATemplate(template);
+      check(`the served page's template name belongs to the Store client, not another app`,
+        rejected === null, rejected || `templateName=${template}`);
+      // The parser counts panes before it counts templates. A page that answers
+      // with a template and no panes is a template with nothing to render, and the
+      // device's answer to that was to ask twice and then ask for nothing else.
+      const panes = (response.body.match(/<Pane>/g) || []).length;
+      check(`the served page carries the panes the parser counts`,
+        panes > 0 && (response.body.match(/<\/Pane>/g) || []).length === panes,
+        `panes=${panes} templates=${(response.body.match(/<Template[ >]/g) || []).length}`);
+      // The document type: the page root has to be the element the parser's
+      // store-page grammar names, not the Atom feed the older generation used.
+      const root = (response.body.match(/^<\?xml[^?]*\?>\s*<([A-Za-z:]+)/) || [])[1];
+      check(`the served page is rooted where the parser looks`,
+        root === 'StorePage',
+        `root=<${root}> format=${response.headers['x-lab-page-format']}`);
+    } else {
+      const archivedType = response.headers['x-lab-archive-template'];
+      const confound = whyNotATemplate(archivedType);
+      check(`the archived page declares what it carries and that it is not a substitute`,
+        Boolean(response.headers['x-lab-archive-warning']) && confound !== null,
+        `template=${archivedType} page=${response.headers['x-lab-archive-page']}`);
+      console.log(`     this is not the page the request asked for: it is ${response.headers['x-lab-archive-page']},`);
+      console.log(`     and its template ${archivedType} is ${confound ? 'not the Store client\'s' : 'unknown'}.`);
+      console.log('     set livestore.protocol.serve to "generated" to rehearse the page the phone actually asks for.');
+    }
+  } catch (err) {
+    check(`${storeHost} serves a Store home page`, false, err.message);
+  }
+
+  // The other endpoint in the same flow, and the only one that still failed: the
+  // update check. Answered over the phone's own transport, with the body shape the
+  // capture shows it sending.
+  const updatesHost = 'marketplaceedgeservice.windowsphone.com';
+  const updatesQuery = '/v8/catalog/updates?os=8.10.14219.0&cc=IT&lang=it-IT'
+    + '&hw=402699266&dm=RM-941_eu_france_308&oemId=NOKIA';
+  const updatesBody = '<?xml version="1.0" encoding="UTF-8"?>'
+    + '<BatchGetProductUpdatesRequest xmlns="http://schemas.zune.net/catalog/apps/2008/02">'
+    + '<Resources><Resource><InputSkuId>1076f542-8a6f-4cda-86e2-012bb248c9ef</InputSkuId>'
+    + '<InputLicenseRight>Purchase</InputLicenseRight></Resource></Resources>'
+    + '</BatchGetProductUpdatesRequest>';
+  const updatesReply = await new Promise((resolve) => {
+    const req = http.request({
+      host: proxyHost,
+      port: config.proxy.httpPort,
+      path: updatesQuery,
+      method: 'POST',
+      headers: {
+        host: updatesHost,
+        'user-agent': 'ZDM/4.0; Windows Mobile 8.1',
+        'content-type': 'application/xml',
+        'content-length': String(Buffer.byteLength(updatesBody)),
+        connection: 'keep-alive',
+      },
+    }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+    });
+    req.on('error', (err) => resolve({ error: err.message }));
+    req.end(updatesBody);
+  });
+  check(`the update check is answered instead of failing`,
+    updatesReply.status === 200
+      && updatesReply.body.includes('<BatchGetProductUpdatesResponse')
+      && updatesReply.body.includes('<ProductId>1076f542-8a6f-4cda-86e2-012bb248c9ef</ProductId>')
+      && updatesReply.headers['x-lab-skus'] === '1',
+    updatesReply.error
+      || `status=${updatesReply.status} skus=${updatesReply.headers?.['x-lab-skus']} bytes=${updatesReply.body?.length}`);
+
+  // The same request over the transport the phone actually uses.
+  //
+  // The capture is unambiguous about it: the Store's page request is plain HTTP
+  // on port 80, not TLS on 443, with no Accept header and this user agent -
+  //
+  //   GET http://cdn.marketplaceedgeservice.windowsphone.com/v9/catalog/storePages?...
+  //   user-agent: ZDM/4.0; Windows Mobile 8.1
+  //
+  // - so the rehearsal that decides whether the Store opens has to be made on
+  // port 80 too. Rehearsing only over TLS would leave the listener the device
+  // really talks to unproven, which is the failure that once made the phone look
+  // idle while it was retrying.
+  console.log('--- store protocol, over the phone\'s own transport (plain HTTP on port 80)');
+  const plainReply = await new Promise((resolve) => {
+    const req = http.request({
+      host: proxyHost,
+      port: config.proxy.httpPort,
+      path: storeQuery,
+      method: 'GET',
+      headers: {
+        host: storeHost,
+        'user-agent': 'ZDM/4.0; Windows Mobile 8.1',
+        connection: 'keep-alive',
+      },
+    }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+    });
+    req.on('error', (err) => resolve({ error: err.message }));
+    req.end();
+  });
+  check(`port ${config.proxy.httpPort} answers the Store page for ${storeHost}`,
+    plainReply.status === 200
+      && plainReply.headers['content-type'] === 'application/atom+xml; charset=utf-8'
+      && String(plainReply.headers['x-lab-protocol'] || '').startsWith('storePages')
+      && plainReply.body.includes('http://schemas.zune.net/catalog/apps/2008/02'),
+    plainReply.error
+      || `status=${plainReply.status} label=${plainReply.headers?.['x-lab-protocol']} bytes=${plainReply.body?.length}`);
+} else {
+  console.log('      skipped: livestore.protocol.enabled is false');
+}
+
 // A host that is NOT hijacked must go through untouched.
 //
 // The proof is the certificate: the tunnel is byte-for-byte, so the client sees
@@ -283,7 +456,7 @@ try {
   check('non-hijacked host keeps its real certificate (traffic untouched)', false, err.message);
 }
 
-const after = latestCaptureCount();
+const after = await latestCaptureCount();
 check('every rehearsed request was captured', after - before >= hosts.length,
   `new entries=${after - before}`);
 

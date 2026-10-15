@@ -14,6 +14,45 @@ import { prettyPath } from './paths.mjs';
 
 const TEXTUAL = /^(text\/|application\/(json|xml|javascript|ecmascript|x-www-form-urlencoded|soap\+xml|problem\+json|xaml))/i;
 
+/**
+ * Read a JSONL file line by line, never as one string.
+ *
+ * A long session's index passes Node's maximum string length, and then
+ * `readFileSync(path, 'utf8')` throws `ERR_STRING_TOO_LONG`. Every reader that
+ * caught that and fell back to a count reported **zero exchanges** - a session's
+ * own record of what the device did, reported as "nothing intercepted yet", at
+ * exactly the sizes where the capture matters most. Chunks and whole lines keep
+ * the memory flat and the answer true.
+ */
+export async function* readJsonl(file) {
+  const handle = await fsp.open(file, 'r');
+  try {
+    const buffer = Buffer.alloc(1 << 20);
+    let carry = '';
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      const lines = (carry + buffer.subarray(0, bytesRead).toString('utf8')).split('\n');
+      carry = lines.pop() ?? '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed) yield trimmed;
+      }
+    }
+    const last = carry.trim();
+    if (last) yield last;
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Number of entries in a JSONL file, counted without holding it. */
+export async function countJsonl(file) {
+  let total = 0;
+  for await (const _line of readJsonl(file)) total += 1;
+  return total;
+}
+
 function sessionStamp() {
   return new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
 }

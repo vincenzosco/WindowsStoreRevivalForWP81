@@ -15,6 +15,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { readJsonl } from '../src/capture.mjs';
 import { isMainModule } from '../src/paths.mjs';
 
 const HEADER_PREVIEW = 40;
@@ -41,16 +42,22 @@ function newestSession(root) {
   return entries.length ? path.join(root, entries[0].name) : null;
 }
 
-function readIndex(sessionDir) {
+/**
+ * The whole session index, parsed.
+ *
+ * Streamed rather than read as one string: a session that has been running long
+ * enough to be interesting is also long enough to pass Node's maximum string
+ * length, where `readFileSync(..., 'utf8')` throws and the report comes out empty.
+ * A torn last line is skipped, exactly as before.
+ */
+async function readIndex(sessionDir) {
   const indexPath = path.join(sessionDir, 'index.jsonl');
   if (!fs.existsSync(indexPath)) return [];
-  return fs.readFileSync(indexPath, 'utf8')
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => {
-      try { return JSON.parse(line); } catch { return null; }
-    })
-    .filter(Boolean);
+  const entries = [];
+  for await (const line of readJsonl(indexPath)) {
+    try { entries.push(JSON.parse(line)); } catch { /* torn line: skip it */ }
+  }
+  return entries;
 }
 
 function readBodies(sessionDir, entry) {
@@ -226,7 +233,7 @@ function renderMarkdown(report, sessionDir) {
   return `${lines.join('\n')}\n`;
 }
 
-function main() {
+async function main() {
   const args = process.argv.slice(2);
   const flag = (name, fallback) => {
     const i = args.indexOf(`--${name}`);
@@ -246,7 +253,7 @@ function main() {
   const hijackPatterns = config.dns?.hijack?.names || [];
   const mitmPatterns = config.proxy?.mitm?.hosts || [];
 
-  const exchanges = readIndex(sessionDir);
+  const exchanges = await readIndex(sessionDir);
   const dnsQueries = readDnsQueries(captureRoot);
   const report = buildReport(exchanges, dnsQueries, hijackPatterns, mitmPatterns);
 
@@ -293,5 +300,10 @@ function main() {
 }
 
 if (isMainModule(import.meta.url)) {
-  main();
+  // Streamed now, so the report is async: a rejected promise must still be loud,
+  // not an empty report with a clean exit status.
+  main().catch((err) => {
+    console.error(`analysis failed: ${err.message}`);
+    process.exit(1);
+  });
 }

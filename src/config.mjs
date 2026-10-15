@@ -53,6 +53,40 @@ const DEFAULTS = {
     baseUrl: 'https://zinc.onelive.me/v1',
     apiKey: '',
     cacheTtlMs: 300000,
+    // The Store protocol handler is off unless asked for: serving the phone's
+    // own store page is a decision, not a default. See src/store/protocol.mjs.
+    protocol: {
+      enabled: false,
+      // A fake store of invented apps is the default so the page has enough
+      // sections to look at; the three-entry fixture stays for the tests.
+      catalogFile: 'src/store/fixtures/demo-catalog.json',
+      // The template the page asks the client to render it with. Both values come
+      // from src/store/vocabulary.mjs, which is a reading of the phone: the name
+      // from the style the Store page is drawn with (Store_DynamicHubStyle_*),
+      // the type from the set this phone's UI assets actually style. They are two
+      // different things and a store page carries both.
+      hubTemplate: 'DynamicHub',
+      templateType: '003',
+      // Whether the type travels as an attribute of <Template>, as a child
+      // element, or both. Nothing readable from the phone decides it, so both are
+      // written until the device says which it reads. See TYPE_KEY_FORMS.
+      templateTypeForm: 'both',
+      // The document the page endpoint answers with. 'storePage' is the v9 store
+      // page grammar the phone's parser describes (/StorePage with /Panes/Pane and
+      // /Templates/Template), its panes carrying a reference to their section;
+      // 'panes' is that same document with the section's items inside the pane as
+      // well, which is how the archived response arranges them; 'atom' is the v8
+      // <a:feed> shape archived responses show. Kept as a switch so the document
+      // type is one variable. See PAGE_FORMATS in src/store/catalog-feed.mjs.
+      pageFormat: 'storePage',
+      pageSize: 25,
+      // 'generated' builds the page from the catalog; 'archive' answers the page
+      // endpoints with a real archived response instead. That is an experiment
+      // with a known confound, described where it is served in
+      // src/store/protocol.mjs - it is not a one-variable change.
+      serve: 'generated',
+      archiveFile: 'src/store/fixtures/archive/real-hub-page-20130813.xml',
+    },
   },
   rules: [],
 };
@@ -102,6 +136,17 @@ export function matchesAny(name, patterns) {
     if (re.test(lc)) return true;
   }
   return false;
+}
+
+/**
+ * Hosts the lab is configured to intercept - the only hosts a Store handler may
+ * answer for. Shared by every handler so they cannot disagree about it: a handler
+ * that answered for a host the device was never told to send here would be
+ * inventing traffic.
+ */
+export function isInterceptedHost(config, host) {
+  if (config.proxy.mitm.mode === 'all') return true;
+  return matchesAny(host, config.proxy.mitm.hosts);
 }
 
 /** Best-effort LAN IPv4: first non-internal IPv4, preferring the default-route interface. */
@@ -167,6 +212,15 @@ export function loadConfig(configPath = 'config.json') {
   }
   if (config.proxy.mitm.mode !== 'listed' && config.proxy.mitm.mode !== 'all') {
     errors.push('proxy.mitm.mode must be "listed" or "all"');
+  }
+  // An enabled Store protocol handler with no catalog to serve would answer the
+  // device with an empty page, which reads as "the Store has nothing" rather than
+  // as a missing file. Refuse at load instead, where the operator sees it.
+  if (config.livestore?.protocol?.enabled) {
+    const catalogFile = path.resolve(config.livestore.protocol.catalogFile || '');
+    if (!config.livestore.protocol.catalogFile || !fs.existsSync(catalogFile)) {
+      errors.push(`livestore.protocol.catalogFile not found: ${catalogFile}`);
+    }
   }
   if (errors.length) {
     throw new Error(`Invalid configuration:\n  - ${errors.join('\n  - ')}`);

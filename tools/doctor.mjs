@@ -13,6 +13,7 @@ import path from 'node:path';
 import { loadConfig } from '../src/config.mjs';
 import { probeTcp, probeUdp, describePortOwner } from '../src/preflight.mjs';
 import { canonical, prettyPath } from '../src/paths.mjs';
+import { countJsonl } from '../src/capture.mjs';
 
 const configPath = path.resolve(process.argv.includes('--config')
   ? process.argv[process.argv.indexOf('--config') + 1]
@@ -221,7 +222,10 @@ const sessions = fs.existsSync(captureRoot)
 let captured = 0;
 if (sessions.length) {
   const indexPath = path.join(captureRoot, sessions[sessions.length - 1], 'index.jsonl');
-  try { captured = fs.readFileSync(indexPath, 'utf8').split('\n').filter(Boolean).length; } catch { captured = 0; }
+  // Counted without holding the file: a long session's index passes Node's
+  // maximum string length, and reading it whole used to throw - which this catch
+  // turned into "nothing intercepted yet", the most misleading answer possible.
+  try { captured = await countJsonl(indexPath); } catch { captured = 0; }
 }
 if (captured) item('DONE', `${captured} intercepted exchange(s) in ${prettyPath(path.join(captureRoot, sessions[sessions.length - 1]))}`);
 else item('WAITING', 'nothing intercepted yet', 'open the Store on the phone once DNS and the CA are in place');
