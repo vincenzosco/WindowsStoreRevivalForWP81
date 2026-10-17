@@ -164,6 +164,15 @@ does the same for the first pane's own field map and for the archived real respo
 is the only state that is a defect on the evidence, and today there are none: all 22 required
 paths are carried, 12 of them under the atom prefix the real service also used (F-032).
 
+An install is a different conversation, and it has never been captured: the button cannot be
+reached while the page does not render, and the entitlement, package and install steps are
+unmeasured. `npm run trace:install` is the tool for the first question - what the attempt asks
+for. It prints the device's exchanges in order, every name it resolved, and, separately, the
+names it resolved that **the lab never answered**: those went to the real network, and they are
+where a licensing or account host would appear (they are deliberately not hijacked). Read that
+list before deciding what to intercept next; a host the lab answers without having its grammar
+is a new failure, not a fix.
+
 The next single variable is already built and off: `livestore.protocol.paneBackgroundImage`
 writes `<BackgroundImage><id>urn:uuid:…</id></BackgroundImage>` into every pane - the one path
 of the pane's own field map a hub tile would draw with, and the image endpoint answers whatever

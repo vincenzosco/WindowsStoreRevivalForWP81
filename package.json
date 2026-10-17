@@ -22,6 +22,7 @@
     "rehearse": "node tools/rehearse.mjs",
     "store:page": "node tools/store-page.mjs",
     "page:diff": "node tools/page-diff.mjs",
+    "trace:install": "node tools/install-trace.mjs",
     "read-vocabulary": "node tools/read-vocabulary.mjs",
     "read-vocabulary:verbose": "node tools/read-vocabulary.mjs --verbose",
     "make-rootreg": "node tools/make-rootreg.mjs",

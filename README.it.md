@@ -525,6 +525,15 @@ stesso per la mappa dei campi del primo pane e per la risposta archiviata del ve
 richiesti sono portati, 12 dei quali sotto il prefisso atom che usava anche il vero servizio
 (F-032).
 
+Un'installazione è un'altra conversazione, e non è mai stata catturata: il pulsante non si
+raggiunge finché la pagina non si disegna, e i passaggi di licenza, pacchetto e installazione
+non sono misurati. `npm run trace:install` serve alla prima domanda - cosa chiede il tentativo.
+Stampa gli scambi del dispositivo in ordine, ogni nome risolto e, separatamente, i nomi risolti
+che **il lab non ha mai risposto**: quelli sono andati sulla rete vera, ed è lì che comparirebbe
+un host di licenza o di account (non sono hijackati di proposito). Leggi quella lista prima di
+decidere cosa intercettare: un host che il lab risponde senza conoscerne la grammatica è un
+guasto nuovo, non una correzione.
+
 La prossima variabile singola è già scritta ed è spenta: `livestore.protocol.paneBackgroundImage`
 mette `<BackgroundImage><id>urn:uuid:…</id></BackgroundImage>` in ogni pane - l'unico path della
 mappa del pane che un tile disegnerebbe, e il CDN delle immagini risponde a qualunque guid gli
