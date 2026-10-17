@@ -37,9 +37,10 @@ curl -X POST http://<lab address>:8899/__lab/reload
 
 | Command | What it proves | Needs |
 | --- | --- | --- |
-| `npm run selftest` | 128 end-to-end checks: the lab's own behaviour, the page's shape, the application list's entry shape, the configuration answer, the malformed-page control, the mass-storage registry bytes, that the page carries every path of the parser's page grammar, and that a capture is attributed to the right client and device | nothing but a working upstream resolver - one check forwards `example.com` to the real network and times out if it is down (footgun 9) |
+| `npm run selftest` | 147 end-to-end checks: the lab's own behaviour, the page's shape, the application list's entry shape, the configuration answer, the malformed-page control, the mass-storage registry bytes, that the page carries every path of the parser's page grammar, and that a capture is attributed to the right client and device | nothing but a working upstream resolver - one check forwards `example.com` to the real network and times out if it is down (footgun 9) |
 | `npm run read-vocabulary` | One check per name and path in `src/store/vocabulary.mjs` - page types, template types, the parser's whole page-grammar run, every byte offset - still present on the phone. The tool prints the count | phone in mass storage, elevated |
 | `npm run store:page` | What the page *carries* right now, read back from the file that was written | nothing |
+| `npm run page:diff` | Whether the page carries the constructs the client's parser names: every `PAGE_PARSE_PATHS` entry and the first pane's own field map, each reported as spelled exactly, carried under a prefix only, or missing, beside the archived real response. Reads the document through the real router, so it is the response the device would get, not a reconstruction | nothing |
 | `npm run doctor` | One-screen state: config, listeners, CA, device traffic, the next step | lab running |
 | `npm run watch` | Live device-only traffic, answered 200s and refused handshakes named | lab running |
 | `npm run rehearse` | The whole chain against the real host names, without the device | nothing |
@@ -69,7 +70,9 @@ instead of leaving you to infer it, and it distinguishes "the device never reach
 
 1. `npm run selftest` again, and read the failures rather than the count.
 2. If the change affects the page, `npm run store:page` and look at what it carries - the bytes,
-   the root element, the template type, and how many items sit inside `<Panes>`.
+   the root element, the template type, and how many items sit inside `<Panes>` - then
+   `npm run page:diff`, which is the same question asked against the client's own parser: a
+   `missing` there is a defect the eye would not catch.
 3. If the change is meant to change the device's behaviour, the only measurement that counts is
    the device's next request: `npm run watch`, and read the capture for what it asks *after* the
    answer - per `client.address` and `user-agent`, never in aggregate (footgun 4). A page-shaped

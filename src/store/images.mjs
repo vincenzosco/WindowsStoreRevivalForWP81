@@ -7,17 +7,27 @@
 // every one answered `502 upstream_loop` because no handler matched the host. The
 // host is already in `dns.hijack.names` and `proxy.mitm.hosts`: the lab had been
 // swapping a real service's pictures for an injected failure without ever saying
-// so. This handler replaces that failure with an actual picture - and on
-// 2026-10-17 16:4x local the handset confirmed it decodes: the square where an
-// app's logo is drawn went from grey to this PNG's dark blue, so the client read
-// the bytes and painted them, where the 502 body had painted nothing.
+// so. This handler replaces that failure with an actual picture.
 //
-// WHAT IT SERVES, AND WHAT IT DOES NOT CLAIM. A 48x48 solid PNG, generated here,
-// the same bytes for every guid and every `imagetype`. It is not artwork, it is not
-// the icon of any app, and it is not scaled per `imagetype` - the client asks for
-// icon_small, tile, background and more, and all of them get the same 48x48. Every
-// response says `x-lab-invented: 1` and carries `x-lab-image: placeholder`, so a
-// capture can never read as "the real CDN answered".
+// WHY THE PICTURE IS NOT A FLAT FIELD. It was, for the first hour, and that was a
+// mistake worth writing down: a solid 48x48 square of #2E355C was served, the
+// handset's icon slot went from grey to that same dark blue, and the reading taken
+// from it was "the client decoded and drew these bytes". It is not a reading that
+// blue square could support. A flat field is exactly what a client's *own* empty
+// image background looks like, so "painted our bitmap" and "painted its own
+// background instead" are the same photograph - and the person looking at the
+// handset reported the second thing: the colour changed, no logo is drawn. So the
+// placeholder now carries a mark a UI cannot be confused for: a light frame and a
+// diagonal cross on the dark field, drawn here pixel by pixel. If the mark appears
+// on the device the bitmap is being drawn; if only the colour does, it is not, and
+// the difference is now observable rather than arguable.
+//
+// WHAT IT SERVES, AND WHAT IT DOES NOT CLAIM. A 48x48 PNG, generated here, the same
+// bytes for every guid and every `imagetype`. It is not artwork, it is not the icon
+// of any app, and it is not scaled per `imagetype` - the client asks for icon_small,
+// tile, background and more, and all of them get the same 48x48. Every response
+// says `x-lab-invented: 1` and carries `x-lab-image: placeholder`, so a capture can
+// never read as "the real CDN answered".
 //
 // The other half of that session is deliberately NOT answered here: `/v8/catalog/queries`
 // (the search-box suggestions) and `/v8/catalog/appCategories/<category>` still fall
@@ -25,21 +35,99 @@
 // be invented, and an invented document is a second variable in the same run - which
 // is how E-004 earned its note.
 
+import zlib from 'node:zlib';
+
 import { isInterceptedHost } from '../config.mjs';
 
-// A 48x48 opaque square, RGBA, one IDAT. Built once as a constant so the handler
-// allocates nothing per request and the bytes cannot drift with a library version.
-const PLACEHOLDER_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAAZUlEQVR4nO3PMQ0AIADAMBTx4Qb/NkAER0OyY3835trn'
-  + '54YGNKABDWhAAxrQgAY0oAENaEADGtCABjSgAQ1oQAMa0IAGNKABDWhAAxrQgAY0oAENaEADGtCABjSgAQ1oQAMa8NoF'
-  + 'Xweu4jcpxR8AAAAASUVORK5CYII=',
-  'base64',
-);
+const SIZE = 48;
+// The field, and the mark. Both are constants so the bytes cannot drift with a
+// library version, and so a test can name the colours it expects to find.
+const FIELD = [0x2e, 0x35, 0x5c, 0xff]; // #2E355C
+const MARK = [0xe8, 0xe9, 0xf5, 0xff]; // #E8E9F5
+
+const CRC_TABLE = (() => {
+  const table = new Int32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c;
+  }
+  return table;
+})();
+
+function crc32(buffer) {
+  let c = 0xffffffff;
+  for (const byte of buffer) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function chunk(type, data) {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body), 0);
+  return Buffer.concat([length, body, crc]);
+}
+
+/**
+ * The mark: a two-pixel frame inset four pixels from the edge, and a three-pixel
+ * diagonal cross. Both are drawn by distance from the nearest edge and from the
+ * two diagonals, so the shape is described rather than pasted, and a test can ask a
+ * pixel whether it is field or mark.
+ */
+function isMark(x, y) {
+  const inset = 4;
+  const last = SIZE - 1 - inset;
+  const onFrame = (x >= inset && x <= last && y >= inset && y <= last)
+    && (x < inset + 2 || x > last - 2 || y < inset + 2 || y > last - 2);
+  const onDiagonal = Math.abs(x - y) <= 1 || Math.abs(x + y - (SIZE - 1)) <= 1;
+  const insideFrame = x > inset && x < last && y > inset && y < last;
+  return onFrame || (onDiagonal && insideFrame);
+}
+
+function buildPlaceholder() {
+  const raw = Buffer.alloc((SIZE * 4 + 1) * SIZE);
+  let offset = 0;
+  for (let y = 0; y < SIZE; y += 1) {
+    raw[offset] = 0; // filter type: none, so the bytes below are the pixels
+    offset += 1;
+    for (let x = 0; x < SIZE; x += 1) {
+      const colour = isMark(x, y) ? MARK : FIELD;
+      raw[offset] = colour[0];
+      raw[offset + 1] = colour[1];
+      raw[offset + 2] = colour[2];
+      raw[offset + 3] = colour[3];
+      offset += 4;
+    }
+  }
+
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(SIZE, 0);
+  header.writeUInt32BE(SIZE, 4);
+  header[8] = 8; // bit depth
+  header[9] = 6; // colour type: RGBA
+  header[10] = 0; // deflate
+  header[11] = 0; // adaptive filtering
+  header[12] = 0; // no interlace
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', header),
+    chunk('IDAT', zlib.deflateSync(raw, { level: 9 })),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+const PLACEHOLDER_PNG = buildPlaceholder();
 
 /** The bytes, for a test or a script that wants to verify them. */
 export function placeholderPng() {
   return PLACEHOLDER_PNG;
 }
+
+/** The two colours the placeholder is made of, for a test that reads the pixels. */
+export const PLACEHOLDER_COLOURS = { field: FIELD, mark: MARK, size: SIZE };
 
 export function imageSettings(config) {
   return {
@@ -98,6 +186,10 @@ export function createStoreImages(config) {
           'x-lab-source': 'store-images',
           'x-lab-image': 'placeholder',
           'x-lab-invented': '1',
+          // Said out loud so a capture can tell a marked placeholder from the flat
+          // field it replaced, which is the difference between "the bitmap is drawn"
+          // and "the slot is painted".
+          'x-lab-image-shape': `${SIZE}x${SIZE} field+frame+X`,
         },
         body: PLACEHOLDER_PNG,
       };

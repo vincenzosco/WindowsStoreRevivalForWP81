@@ -385,7 +385,7 @@ passthrough**: un bug in un handler non rompe il telefono.
 |---|---|---|
 | `store-health` | Risponde su `<host intercettato>/__store/health` con un JSON che prova che la richiesta è arrivata al lab e la risposta è tornata indietro, senza toccare alcun backend | sì |
 | `store-protocol` | Risponde agli endpoint che il telefono chiama **davvero** per aprire lo Store (`/v9/catalog/storePages`, `/v8/catalog/hubs`, `/v[89]/catalog/apps`, `/v8/catalog/updates` e - dal 2026-10-17 - `/v8/Configuration/Stores/...`), nel formato XML che sa leggere | no, va abilitato |
-| `store-images` | Risponde al CDN delle immagini (`cdn.marketplaceimages.../v8/images/<guid>`) con un PNG segnaposto: prima erano 502 iniettati dal lab, 420 in due minuti e mezzo su una sola ricerca (F-031) | no, va abilitato |
+| `store-images` | Risponde al CDN delle immagini (`cdn.marketplaceimages.../v8/images/<guid>`) con un PNG segnaposto **con un segno visibile** (cornice e croce diagonale): un campo piatto non distingue «il client ha disegnato i nostri byte» da «ha disegnato il proprio sfondo vuoto», ed è la prima versione di questo handler a dirlo; prima erano 502 iniettati dal lab, 420 in due minuti e mezzo su una sola ricerca (F-031) | no, va abilitato |
 | `store-live-client` | L'API JSON del **secondo** client presente sul telefono (l'app Live Store, non lo Store di sistema): `/apps`, `/games`, `/apps/search`, `/app/{id}`, `/me` - forma letta dalla sua cache (F-029, F-030) | no, va abilitato |
 | `catalog-bridge` | Serve il catalogo Live Store sotto un prefisso di path sugli host intercettati | no, va abilitato |
 
@@ -514,6 +514,15 @@ ogni editore che dice `Lab Fixture`, così nessun listino può passare per reale
 sezione, con prezzo e valutazione di ogni app. È la risposta a «cosa riceverebbe il
 dispositivo», e si legge anche a lab spento e mentre il telefono non mostra altro che un
 codice di assert.
+
+`npm run page:diff` chiede la domanda più difficile: non *cosa* c'è nella pagina, ma se la pagina
+porta i costrutti che il parser del client nomina. Prende il documento dal router vero, lo
+percorre e riporta ogni path del parser (`ZMarketplace.dll`) come scritto esattamente, portato
+sotto un prefisso di namespace che la stringa del parser non ha, oppure assente - poi fa lo
+stesso per la mappa dei campi del primo pane e per la risposta archiviata del vero servizio.
+`assente` è l'unico stato che sulle prove è un difetto, e oggi non ce ne sono: tutti i 22 path
+richiesti sono portati, 12 dei quali sotto il prefisso atom che usava anche il vero servizio
+(F-032).
 
 #### Il vocabolario, letto dal telefono
 

@@ -32,12 +32,12 @@ same event appears as `17:56:07` local and `15:56:07Z`.
 | The served response that file matches | `bodies/0117-res.bin`, 55234 bytes, SHA-256 `38E904A1F685AE9F9E1B71DF3B809A951D798BD5461E604FDCBBBD1355ED4FBE` — the delivery at `2026-10-15T18:47:27.289Z` | `captures/session-2026-10-15_15-36-48/index.jsonl` + `bodies/`, `sha256sum` |
 | What the device wrote about the Store in the whole session | **one** file — the cached page above. 84 files under `Data` since 17:00, 18 past the hive/telemetry/ETW filter, 1 of them Store-related | elevated readout, 2026-10-15 21:05 |
 | Page built today from the fixture | 29893 bytes, identical except `<a:updated>` | `npm run store:page`, `.selftest/cmp.fresh.txt` |
-| Checks in the suite | 128, all passing | `npm run selftest`, 2026-10-17 |
+| Checks in the suite | 147, all passing | `npm run selftest`, 2026-10-17 |
 | Exchanges in `captures/` | 487 480 over 28 sessions, of which **109 are a device's** - 99.98 % of the index is this PC | `npm run analyze -- --all-sessions`, 2026-10-16 |
 | DNS records in the same capture | 19 615 from 21 addresses, and only **8 639** are this PC's - a `.151` that asks for `a.root-servers.net` 6 437 times, not the phone | same command |
 | Devices the requests identify in that capture | **two** handsets: `x-wp-device-id 40752FED…5A1872` (the one above) and `3499541B…EEA32B`, `os=8.10.14226.0`, `dm=RM-941_eu_hungary_356`; the two overlap for 2 h 38 m on 2026-10-15 | same command |
 | What the measured handset asked for in the whole capture | **96** exchanges at `.136` and `.137`: 67× the page, 7× the `catalog.zune.net` root, 4× `OEMStores/NOKIA` + 4× `MOStores/`, 1× `POST /v8/catalog/updates`, 4× `HEAD account.nokia.com`, 9× `ssl-api.bing.com` - the second handset's 13 exchanges are not in that list | same command |
-| Page grammar the parser walks | 27 paths declared, 22 required, all 22 carried by the page — in both document shapes | `npm run selftest` |
+| Page grammar the parser walks | 27 paths declared, 22 required, **all 22 carried, 0 missing**: 10 spelled exactly, 12 under the atom prefix the real service also used | `npm run page:diff`, `npm run selftest` |
 | Difference between the page we serve and the page `store:page` builds | 116 bytes, the six `Flight`/`SEG0`-`SEG5` parameters the phone sends and the tool's reconstruction omits | replay of the phone's own query, 2026-10-15 |
 | Machine-verified vocabulary | **69 checks against the device itself** - every page type, template type, the parser's whole path run and every byte offset, all present where the module cites them | `npm run read-vocabulary -- --device H:`, 2026-10-15, exit 0 |
 | Does the check detect drift? | Yes: against a copy of `ZMarketplace.dll` shifted by one byte, 64 of 69 fail and the message names where the string actually is (`cites @28776 ... the path itself is at @28775`) | `--device` on a tree holding the shifted copy, 2026-10-15, exit 1 |
@@ -1490,18 +1490,26 @@ Each one changes **a single variable**, and each names the value it replaced so 
   pages, now this). One hypothesis fits the timing and is **explicitly a hypothesis**: with the image host hijacked, the
   client was handed a 502 error document where a bitmap was expected, and decoding it throws `E_INVALIDARG`. The `images`
   flag is the test of that and nothing else, because it changes the images and leaves the page untouched.
-- **Read on the handset, one Store open with the placeholder armed: the bytes decode, and the page does not care** The square
-  where an app's logo is drawn - in the same list the client had rendered - went from **grey to the placeholder's own dark
-  blue**, `#2E355C`, the colour this lab generated and nothing else in that UI carries. So the client downloaded those bytes,
-  decoded them as a bitmap and painted them, where the `502` body had painted nothing; the injected failure was real in every
-  list the client drew, and this lab had been causing it. The same open left the home page **unchanged, still on the spinner**,
-  which is the other half of the reading and the more useful one: **the page's missing model does not depend on images.** Two
-  things follow - the 502 was a defect to fix and 420 requests of it are now 200s, and the page experiment is back to one
-  unknown with one fewer confound. The reading is the user's, from the screen; the capture holds the image requests and the
-  page fetch, not the pixels.
-- **Verified from the PC** `npm run selftest` **145/145**, exit 0, two checks new (off falls through; on answers an unlisted
-  host `421` and a listed one `200 image/png` whose body has the PNG signature, `IHDR` and `IEND`, with `content-length`
-  equal to the body; and the same bytes for another guid and another `imagetype`). Over the running lab, with the phone's own
+- **Read on the handset, one Store open with the placeholder armed: the slot changed colour, and that is all it showed** The
+  square where an app's logo is drawn - in the same list the client had rendered - went from **grey to the placeholder's own
+  dark blue**, `#2E355C`. That was first written here as "the client decoded the bitmap", and the reading was **wrong**, so it
+  is kept and corrected rather than deleted: a **flat field cannot distinguish** a client that painted this lab's bitmap from
+  one that painted its own empty-image background, and both produce that same coloured square. The person looking at the
+  handset answered the question the pixels could not - the colour changed and **no logo is drawn** - which is what the second
+  reading of a flat field would look like. So all that session established on the screen is that *something* was painted in the
+  slot where the `502` painted nothing; whether it was these bytes is now a test instead of an inference, because the
+  placeholder carries a **frame and a diagonal cross** (`src/store/images.mjs`, `x-lab-image-shape: 48x48 field+frame+X`). If
+  the mark appears, the bitmap is drawn; if only the colour does, it is not. What the same open did settle is the other half:
+  the home page was **unchanged, still on the spinner**, so **the page's missing model does not depend on images.** The reading
+  is the user's, from the screen; the capture holds the image requests and the page fetch, not the pixels.
+- **Read in a second session, with the handler already armed** `captures/session-2026-10-17_14-27-40`, 56 requests: the image
+  host asked 14 times and answered `200` every time (`icon_small` and `icon_large`, 13 distinct guids), where the earlier
+  session has 420 of them all `502`. The failure class is gone from the capture; the screen is what decides whether the bytes
+  are drawn.
+- **Verified from the PC** `npm run selftest` **147/147**, exit 0, three checks on the images (off falls through; on answers
+  an unlisted host `421` and a listed one `200 image/png` whose body has the PNG signature, `IHDR` and `IEND`, with
+  `content-length` equal to the body; the same bytes for another guid and another `imagetype`; and the PNG **decodes to two
+  colours with a mark at the centre**, so a flat field cannot pass as a marked placeholder again). Over the running lab, with the phone's own
   `Host`: `/v8/images/a07cf5c2-…?imagetype=icon_small` `200`, `content-type: image/png`, `content-length: 158`,
   `x-lab-source: store-images`; the page endpoint unchanged at `200`, 58 555 bytes, `x-lab-page-format: panes`.
 - **Does not establish** Why the page frame yields no model - only that the entries do render, so the difference is in the
@@ -1509,6 +1517,49 @@ Each one changes **a single variable**, and each names the value it replaced so 
   code appeared on, and the capture cannot say. Nor that the two `502` endpoints are irrelevant: `/v8/catalog/queries` and
   `/v8/catalog/appCategories` still fall through, and no capture of either document exists, so answering them would mean
   inventing a grammar - which is why they are left alone.
+
+## F-032 The page frame carries every path its parser names, so the missing model is not a missing path
+
+- **Date** 2026-10-17 evening · **Area** the page document · **Method** `npm run page:diff` (new,
+  `tools/page-diff.mjs`), which fetches the page **through the real router** - so it reads what the device would be
+  sent under the current config - walks it, and reports every one of `PAGE_PARSE_PATHS` (the selectors read out of
+  `ZMarketplace.dll`) as carried exactly, carried under a prefix only, or missing; then does the same for the first
+  `<Pane>` against `PANE_FIELDS`, and for the archived response of the real service. The same reading is asserted
+  in `npm run selftest`, so a builder change that drops a parser path fails the suite instead of a device run.
+- **The result** 22 required parser paths, **0 missing**. 10 are spelled exactly as the parser spells them
+  (`/StorePage`, `/Panes/Pane` ×8, `/Templates/Template`, and six the application records satisfy anywhere in the
+  document). 12 are carried under the atom prefix - `/feed`, `/feed/entry`, `/feed/link`, `/feed/entry/id`,
+  `/feed/impressionId`, `/feed/entry/editorialItems/editorialItem`, and the application/offer subtree. That is
+  **how the real service spelled them too**: the archived v8 response is `a:feed`/`a:entry`/`a:link` throughout,
+  so the prefix is a property of the protocol and not something this lab introduced, and which spelling the
+  client's XML engine accepts is not decided here.
+- **What that rules out** The hypothesis held since F-014 - that the page renders nothing because the client asks
+  its parser for a construct the document omits - is **refuted for all 22 required paths**. Whatever fails is
+  either a value, a spelling, or something below the paths the page parser walks.
+- **The pane, one level down** Of the 12 paths in `PANE_FIELDS`, the served pane carries **8**: `/Id`, `/Title`,
+  `/Type`, `/CollectionId`, `/DataSource/Type`, `/DataSource/Url`, `/MaxItems`, `/MinItems`. It does **not** carry
+  `/SubType`, `/BackgroundImage/id`, `/LiveTileUpdateInterval`, `/StoreObjectsForLiveTile`. Nothing read says the
+  pane parser *requires* any of them - and the archived page carries **no `<Panes>` at all**, its items hang
+  directly off the root as `a:entry`, so the archive cannot settle it. That is a fact about the document, recorded
+  as one: four fields absent, none of them yet shown to be wanted.
+- **The candidates left, ranked, with what each rests on**
+  1. **A pane field that is wanted and absent** - `BackgroundImage/id` first, because a hub tile draws art and the
+     pane map names it (@14024). Evidence that it is required: none. Evidence that it is used at all: the name is
+     in the pane's own property map. This is the next probe and it is one variable: write a
+     `<BackgroundImage><id>urn:uuid:…</id></BackgroundImage>` into each pane with a guid this lab mints, which the
+     image endpoint now answers for any guid (`F-031`).
+  2. **The pane's `Type` value.** `Collection` was chosen from the parser's literal pool (@29010-@29064) and the
+     phone's own UI asset names; it is a token, not an observation. A wrong token that a client *compares* leaves
+     the rest of the document unread, which is exactly the silence observed.
+  3. **The arrangement.** Panes that *point* at content versus entries that *carry* it. Both arrangements have now
+     been served (`storePage` and `panes`, F-014) and both drew nothing, so this is weakened - but the archive's
+     arrangement is neither of them, so it is not closed either.
+  4. **Something outside the document** - a header, the page cookie, the configuration on the critical path. Less
+     likely since F-027 (the control drew an error, so the client parses) and F-026 (the cookie round-trips), and
+     kept last because each of those is a single observation.
+- **Does not establish** Which of the two spellings the client accepts. Whether the pane parser runs at all for
+  this document, or requires any of the four absent fields. Nothing here is a claim that the page *should* render:
+  it is a statement of what the document contains, checked against what the binary says the client looks for.
 
 
 ## Open experiments, continued

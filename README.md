@@ -93,7 +93,11 @@ The Store's image CDN is answered too, since 2026-10-17: `cdn.marketplaceimages.
 has been hijacked all along, so every icon the handset asked for was answered with the lab's own
 `502` - 420 of them during one search. The `store-images` handler now returns a generated 48x48
 placeholder PNG instead, and nothing else: the page document is untouched, so an image-caused
-change can never be mistaken for a page-caused one. See F-031.
+change can never be mistaken for a page-caused one. The placeholder carries a **mark** - a light
+frame and a diagonal cross on the dark field - on purpose: a flat coloured square cannot tell a
+client that painted this lab's bitmap from one that painted its own empty-image background, and
+the first version of this handler was flat. If the mark appears on the handset the bitmap is
+drawn; if only the colour does, it is not. See F-031.
 
 The handset carries a **second** store client, and it works: a community app whose own cache
 holds the JSON answers of `store-api.live.net.co` (`/apps`, `/games`, `/apps/search?q=`,
@@ -148,6 +152,14 @@ so no listing can be mistaken for a real one:
 `npm run store:page` renders the page offline and prints what is on it, section by section,
 with each app's price and rating. That is the answer to "what would the device be given", and
 it is readable while the lab is stopped and while the phone shows nothing but an assert code.
+
+`npm run page:diff` asks the harder question: not *what* is in the page but whether the page
+carries the constructs the client's own parser names. It fetches the document through the real
+router, walks it, and reports each of the parser's paths (`ZMarketplace.dll`) as spelled
+exactly, carried under a namespace prefix the parser's string does not have, or missing - then
+does the same for the first pane's own field map and for the archived real response. `missing`
+is the only state that is a defect on the evidence, and today there are none: all 22 required
+paths are carried, 12 of them under the atom prefix the real service also used (F-032).
 
 ### The vocabulary, read from the phone
 

@@ -21,6 +21,7 @@
     "canary": "node tools/canary.mjs",
     "rehearse": "node tools/rehearse.mjs",
     "store:page": "node tools/store-page.mjs",
+    "page:diff": "node tools/page-diff.mjs",
     "read-vocabulary": "node tools/read-vocabulary.mjs",
     "read-vocabulary:verbose": "node tools/read-vocabulary.mjs --verbose",
     "make-rootreg": "node tools/make-rootreg.mjs",

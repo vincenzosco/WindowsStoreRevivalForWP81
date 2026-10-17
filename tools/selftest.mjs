@@ -13,6 +13,7 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
+import zlib from 'node:zlib';
 import https from 'node:https';
 import net from 'node:net';
 import tls from 'node:tls';
@@ -34,6 +35,7 @@ import { StoreRouter } from '../src/store/router.mjs';
 import { buildHandlers } from '../src/store/handlers.mjs';
 import { buildStorePageFeed, buildApplicationListFeed, buildProductUpdatesResponse, uuidForApp, uuidForCollection, categoryId, normalizeVersion, findAppByUuid, isUuid, normalizePageFormat, ATOM_NS, CATALOG_NS } from '../src/store/catalog-feed.mjs';
 import { pageSections, applyPageMutation } from '../src/store/protocol.mjs';
+import { collect, coverage, findFirst, pathsUnder, verdictOf } from '../src/store/page-frame.mjs';
 import {
   DEFAULT_TEMPLATE_TYPE, TEMPLATE_GRAMMAR, TEMPLATE_TYPES, PAGE_TYPES, PAGE_PARSE_PATHS,
   PATHS_NEAR_THE_PAGE_GRAMMAR,
@@ -1100,6 +1102,44 @@ async function main() {
       { config, logger, zinc: null },
     ))?.body.equals(png),
     'one placeholder, not a per-guid invention');
+
+  // The placeholder used to be a flat square of #2E355C, and that made its one
+  // observation unreadable: a client painting the bitmap and a client painting its
+  // own empty-image background produce the same coloured slot. What the bytes have
+  // to carry is a mark no background can be - so the test decodes the PNG it just
+  // served (filter 0 for every row, so the pixels are literal) and asks whether the
+  // pixels differ from each other. A flat field fails here, which is the point.
+  const idat = (() => {
+    const parts = [];
+    for (let off = 8; off + 8 <= png.length;) {
+      const length = png.readUInt32BE(off);
+      const type = png.subarray(off + 4, off + 8).toString('latin1');
+      if (type === 'IDAT') parts.push(png.subarray(off + 8, off + 8 + length));
+      off += 12 + length;
+    }
+    return Buffer.concat(parts);
+  })();
+  let pixels = null;
+  try {
+    pixels = zlib.inflateSync(idat);
+  } catch (err) {
+    pixels = null;
+  }
+  const width = png.length > 24 ? png.readUInt32BE(16) : 0;
+  const height = png.length > 24 ? png.readUInt32BE(20) : 0;
+  const stride = width * 4 + 1;
+  const pixelAt = (x, y) => (pixels && pixels.length === stride * height && pixels[y * stride] === 0
+    ? [...pixels.subarray(y * stride + 1 + x * 4, y * stride + 1 + x * 4 + 4)].join(',')
+    : null);
+  const colours = pixels && pixels.length === stride * height
+    ? new Set(Array.from({ length: width * height }, (_, i) => pixelAt(i % width, Math.floor(i / width))))
+    : new Set();
+  const centre = pixelAt(width >> 1, height >> 1);
+  const corner = pixelAt(0, 0);
+  check('images: the placeholder carries a mark, so a drawn bitmap is not a painted slot',
+    width === 48 && height === 48 && colours.size >= 2 && Boolean(centre) && centre !== corner
+      && pixels.length === stride * height,
+    `${width}x${height}, ${colours.size} colour(s), centre=${centre} corner=${corner}`);
   config.livestore.images.enabled = false;
 
   config.livestore.client.enabled = false;
@@ -1138,6 +1178,31 @@ async function main() {
   check('store protocol: every pane the demo page names answers with that section',
     paneUrls.length === demoSections.length && filled.length > 0 && filled.every(Boolean),
     `${filled.filter(Boolean).length}/${paneUrls.length} source(s) answered for ${demoSections.length} section(s)`);
+
+  // The frame, checked against the client's own parser rather than against a
+  // snapshot: `page-diff` reports which of PAGE_PARSE_PATHS the served page
+  // carries, and this is the same reading asserted as an invariant. A page that
+  // stops carrying a construct the parser names would still be well formed, still
+  // 200, still pass every other check - and would be the failure that has cost the
+  // most runs, so it is the one worth pinning. Spelling is not asserted: twelve of
+  // the paths travel under the atom prefix, exactly as the real service shipped
+  // them, and which spelling the client accepts is the device's answer.
+  const pageFrame = collect(String(demoPage?.body || ''));
+  const frameRows = PAGE_PARSE_PATHS
+    .filter((entry) => entry.required !== false)
+    .map((entry) => ({ entry, result: coverage(pageFrame, entry) }));
+  const frameMissing = frameRows.filter((row) => verdictOf(row.result) === 'missing');
+  const paneFields = pathsUnder(findFirst(pageFrame, 'Pane'));
+  // A pane without a source is the shape F-005 recorded as a client that cannot
+  // fetch; while the data source is armed, the source is part of the invariant.
+  const paneEssentials = ['/Id', '/Title', '/CollectionId',
+    ...(config.livestore.protocol.dataSource ? ['/DataSource/Type', '/DataSource/Url'] : [])]
+    .filter((field) => !paneFields.has(field.split('/').filter(Boolean).join('/')));
+  check('store protocol: the page carries every path the parser names, and its pane can be fetched',
+    frameMissing.length === 0 && paneEssentials.length === 0,
+    `${frameRows.length - frameMissing.length}/${frameRows.length} parser path(s) present`
+      + (frameMissing.length ? `, missing ${frameMissing.map((row) => row.entry.path).join(' ')}` : '')
+      + (paneEssentials.length ? `, pane lacks ${paneEssentials.join(' ')}` : ', pane has its id, title, source and collection'));
 
   // The update check, routed the way the proxy routes it.
   //
