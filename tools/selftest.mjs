@@ -1706,6 +1706,32 @@ async function main() {
     const artBlocks = [...artPage.body.matchAll(/<BackgroundImage><id>urn:uuid:([0-9a-f-]{36})<\/id><\/BackgroundImage>/g)];
     const artIds = new Set(artBlocks.map((match) => match[1]));
     config.livestore.protocol.paneBackgroundImage = false;
+    // The offer's media instance, the next single variable after F-033: off must leave
+    // every offer exactly as before (no mediaInstanceId at all), on must put one after
+    // the offerId of every offer on every surface - the detail response, the list and
+    // the page's application records - with the header saying which arm a delivery is.
+    const detailGuid = uuidForApp(fixtureApps[0].id);
+    const detailOff = await httpsViaProxy({ ...target, requestPath: `/v9/catalog/apps/${detailGuid}`, method: 'GET' });
+    config.livestore.protocol.offerMediaInstance = true;
+    const detailOn = await httpsViaProxy({ ...target, requestPath: `/v9/catalog/apps/${detailGuid}`, method: 'GET' });
+    const listOn = await httpsViaProxy({ ...target, requestPath: '/v9/catalog/apps?chunkSize=50', method: 'GET' });
+    const pageOn = await httpsViaProxy({ ...target, requestPath: storeQuery, method: 'GET' });
+    config.livestore.protocol.offerMediaInstance = false;
+    const offersIn = (body) => (body.match(/<offer>/g) || []).length;
+    const mediaIn = (body) => (body.match(/<offerId>urn:uuid:[0-9a-f-]{36}<\/offerId><mediaInstanceId>urn:uuid:[0-9a-f-]{36}<\/mediaInstanceId>/g) || []).length;
+    check('store protocol: the offer media instance is absent when off and one per offer when on',
+      !detailOff.body.includes('mediaInstanceId')
+        && detailOff.headers['x-lab-offer-media-instance'] === 'none'
+        && detailOn.headers['x-lab-offer-media-instance'] === 'guid'
+        && offersIn(detailOn.body) >= 1 && mediaIn(detailOn.body) === offersIn(detailOn.body)
+        && offersIn(listOn.body) >= 1 && mediaIn(listOn.body) === offersIn(listOn.body)
+        && mediaIn(pageOn.body) === offersIn(pageOn.body)
+        && pageOn.headers['x-lab-offer-media-instance'] === 'guid',
+      `off=${detailOff.headers['x-lab-offer-media-instance']} on=${detailOn.headers['x-lab-offer-media-instance']}`
+        + ` detail=${mediaIn(detailOn.body)}/${offersIn(detailOn.body)}`
+        + ` list=${mediaIn(listOn.body)}/${offersIn(listOn.body)}`
+        + ` page=${mediaIn(pageOn.body)}/${offersIn(pageOn.body)}`);
+
     check('store protocol: the pane background is absent when off and one guid per pane when on',
       !home.body.includes('<BackgroundImage><id>')
         && home.headers['x-lab-pane-background'] === 'none'
@@ -1856,11 +1882,12 @@ async function main() {
     const decisions = indexLines.map((e) => e.decision);
     // One entry per intercepted request made above:
     // 4 rule cases + 1 plain-HTTP case + 1 direct-TLS case + 5 store-handler
-    // cases + 7 store-protocol cases + 1 fetched pane source. The seventh
-    // store-protocol case is the page fetched with the pane background armed, which
-    // is the only way to assert that a config value reaches the wire.
+    // cases + 12 store-protocol cases + 1 fetched pane source. The extra
+    // store-protocol cases are the ones fetched with an experiment armed - the pane
+    // background page and the media-instance detail, list and page - because the wire
+    // is the only place a config value can be shown to have arrived.
     check('capture: every intercepted exchange was indexed',
-      indexLines.length === 19,
+      indexLines.length === 23,
       `entries=${indexLines.length} decisions=${JSON.stringify(decisions)}`);
     check('capture: decisions are labelled per rule',
       decisions.some((d) => d === 'passthrough:passthrough-endpoint')
@@ -1870,10 +1897,10 @@ async function main() {
       JSON.stringify(decisions));
     check('store: handler decisions are labelled with the handler name',
       decisions.includes('store:store-health') && decisions.includes('store:catalog-bridge')
-        // Seven page/feed requests - the last one with the pane background armed -
-        // plus the pane source the page itself named, which the suite fetched back
-        // through the proxy the way the device would.
-        && decisions.filter((d) => d === 'store:store-protocol').length === 8,
+        // Twelve page/feed/detail requests - four of them fetched with an experiment
+        // armed - plus the pane source the page itself named, which the suite fetched
+        // back through the proxy the way the device would.
+        && decisions.filter((d) => d === 'store:store-protocol').length === 12,
       JSON.stringify(decisions.filter((d) => d.startsWith('store:'))));
     const firstCapture = indexLines[0];
     check('capture: request and response bodies are stored',

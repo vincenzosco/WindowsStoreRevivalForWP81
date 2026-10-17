@@ -84,6 +84,12 @@ function protocolSettings(config) {
     // single variable after F-032, and a page that changed without being asked to
     // would make every earlier delivery incomparable.
     paneBackgroundImage: false,
+    // Whether every offer carries `<mediaInstanceId>` after its `<offerId>`. The
+    // archived real page does; this lab has never written one, and an install attempt
+    // on 2026-10-17 answered 0x80070057 (E_INVALIDARG) with no request leaving the
+    // phone (F-033). Hypothesis, not a finding - the next tap on the handset is the
+    // reading, and it is one variable.
+    offerMediaInstance: false,
     pageSize: 25,
     // A "store page cookie" is the only header the client reads back from a
     // response: `WPSHeaderHandler::AddStorePageCookie` / `::GetStorePageCookie`
@@ -627,6 +633,7 @@ export function createStoreProtocol(config) {
           paneType: settings.paneType,
           paneSubType: settings.paneSubType,
           paneBackgroundImage: Boolean(settings.paneBackgroundImage),
+          offerMediaInstance: Boolean(settings.offerMediaInstance),
           now,
         });
         // The probe: the same page, one construct renamed. Refused rather than
@@ -658,6 +665,7 @@ export function createStoreProtocol(config) {
           // be read off a capture that does not say what was armed.
           'x-lab-pane-background': settings.paneBackgroundImage ? 'guid' : 'none',
           ...(templateCheck.ok ? {} : { 'x-lab-template-type-warning': templateCheck.reason }),
+          'x-lab-offer-media-instance': settings.offerMediaInstance ? 'guid' : 'none',
         });
       }
 
@@ -677,6 +685,7 @@ export function createStoreProtocol(config) {
           id: `tag:catalog.zune.net,${now.toISOString().slice(0, 10)}:/apps/${guid.toLowerCase()}`,
           now,
           ...appListShape(settings),
+          mediaInstance: Boolean(settings.offerMediaInstance),
         });
         return atomResponse(xml, {
           ...headers,
@@ -704,6 +713,7 @@ export function createStoreProtocol(config) {
         id: `tag:catalog.zune.net,${now.toISOString().slice(0, 10)}:/apps`,
         now,
         ...appListShape(settings),
+        mediaInstance: Boolean(settings.offerMediaInstance),
       });
       return atomResponse(xml, {
         ...headers,
@@ -750,6 +760,9 @@ function appListHeaders(settings) {
   return {
     'x-lab-applist-rank': entryRank === null ? 'none' : String(entryRank),
     'x-lab-applist-entry-title': entryTitle ? 'yes' : 'no',
+    // Which arm of the offer media-instance experiment a delivery belongs to, on every
+    // surface that writes application records: the list, the detail and the page.
+    'x-lab-offer-media-instance': settings.offerMediaInstance ? 'guid' : 'none',
   };
 }
 

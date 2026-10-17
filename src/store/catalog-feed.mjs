@@ -303,13 +303,35 @@ function categoriesXml(app) {
     + '<isRoot>True</isRoot></category></categories>';
 }
 
-function offerXml(app) {
+/**
+ * The GUID the offer's media instance would have, when the caller asks for one.
+ *
+ * WHY IT IS A SWITCH. The archived response of the real service carries
+ * `<mediaInstanceId>` immediately after `<offerId>` in every offer, and the
+ * client logs the pair it works with when it handles an offer -
+ * `wszLicenseType '%S' wszMediaInstanceId '%S'` (F-017) - so the pair, not the
+ * licence alone, is what a purchase or download is built from. This lab has never
+ * written it: the v9 *application list* archive carries none, which is why it was
+ * left out when that capture was read (F-022), but the v9 *page* and the detail
+ * response are not the list, and on 2026-10-17 an install attempt answered
+ * `0x80070057` (E_INVALIDARG) with no request leaving the phone (F-033). Building an
+ * install request out of an offer that has a licence type and no media instance is
+ * exactly the shape that would throw that.
+ *
+ * HYPOTHESIS, not a finding: nothing observed says the client requires it here.
+ * That is why it is one switch, off by default, and why the reading is the next tap
+ * on the phone - whether E_INVALIDARG turns into a request (and which host it goes
+ * to) or stays.
+ */
+function offerXml(app, mediaInstance = false) {
   const offerId = uuid5(`offer:${app.id}`);
   const price = app.price === undefined || app.price === null ? '0' : String(app.price);
   const currency = app.currencyCode || 'USD';
   const display = app.displayPrice || (price === '0' ? '$0.00' : `$${price}`);
   return '<offers><offer>'
     + `<offerId>urn:uuid:${offerId}</offerId>`
+    // Order as the archive spells it: the id, then its media instance.
+    + (mediaInstance ? `<mediaInstanceId>urn:uuid:${uuid5(`media:${app.id}`)}</mediaInstanceId>` : '')
     + `<clientTypes><clientType>${CLIENT_TYPE}</clientType></clientTypes>`
     + '<paymentTypes><paymentType>Credit Card</paymentType><paymentType>Mobile Operator</paymentType></paymentTypes>'
     + '<store>ZEST</store>'
@@ -336,7 +358,7 @@ function imageXml(app) {
  * `tag` is the element around it: `application` inside a section, `a:entry` in a
  * list. The two differ only in that envelope, so the fields live here once.
  */
-function applicationFields(app, now, { withTitle = true } = {}) {
+function applicationFields(app, now, { withTitle = true, mediaInstance = false } = {}) {
   return (withTitle ? `<title>${text(app.name || app.title || 'Untitled')}</title>` : '')
     + `<sortTitle>${text(app.name || app.title || 'Untitled')}</sortTitle>`
     + `<releaseDate>${normalizeReleaseDate(app.release_date || app.releaseDate)}</releaseDate>`
@@ -351,13 +373,13 @@ function applicationFields(app, now, { withTitle = true } = {}) {
     + `<hasLiveTile>${boolWord(app.hasLiveTile ?? app.has_live_tile)}</hasLiveTile>`
     + categoriesXml(app)
     + '<tags><tag>Independent</tag></tags>'
-    + offerXml(app)
+    + offerXml(app, mediaInstance)
     + publisherXml(app);
 }
 
 /** The application as a section carries it. */
-function applicationXml(app, now) {
-  return `<application><id>urn:uuid:${uuidForApp(app.id)}</id>${applicationFields(app, now)}</application>`;
+function applicationXml(app, now, options = {}) {
+  return `<application><id>urn:uuid:${uuidForApp(app.id)}</id>${applicationFields(app, now, options)}</application>`;
 }
 
 /**
@@ -384,13 +406,13 @@ function applicationXml(app, now) {
  * carry a bare `<title>` - which is why that one is written by
  * `applicationFields` and only the list entry turns it off.
  */
-function applicationEntryXml(app, now, feedImpression, { rank = null, entryTitle = true } = {}) {
+function applicationEntryXml(app, now, feedImpression, { rank = null, entryTitle = true, mediaInstance = false } = {}) {
   return '<a:entry>'
     + `<a:updated>${feedStamp(now)}</a:updated>`
     + `<a:title type="text">${text(app.name || app.title || 'Untitled')}</a:title>`
     + `<a:id>urn:uuid:${uuidForApp(app.id)}</a:id>`
     + '<isHardwareCompatible>true</isHardwareCompatible>'
-    + applicationFields(app, now, { withTitle: entryTitle })
+    + applicationFields(app, now, { withTitle: entryTitle, mediaInstance })
     + `<impressionId>${text(feedImpression)}:API.BDIGeneric</impressionId>`
     + (rank === null ? '' : `<k>${text(rank)}</k>`)
     + '<isUniversal>false</isUniversal>'
@@ -420,8 +442,8 @@ function editorialItemsXml(items) {
 }
 
 /** The application records a section's items refer to, as its entry and its pane both carry them. */
-function applicationsXml(items, now) {
-  return `<applications>${(items || []).map((app) => applicationXml(app, now)).join('')}</applications>`;
+function applicationsXml(items, now, options = {}) {
+  return `<applications>${(items || []).map((app) => applicationXml(app, now, options)).join('')}</applications>`;
 }
 
 /**
@@ -480,7 +502,7 @@ function applicationsXml(items, now) {
  */
 function panesXml({
   sections, withItems = false, now, dataSource = null, paneType = '', paneSubType = '',
-  backgroundImage = false,
+  backgroundImage = false, offerMediaInstance = false,
 }) {
   const panes = sections.map((section, index) => {
     const collection = uuidForCollection(section.title || `section-${index + 1}`);
@@ -496,7 +518,9 @@ function panesXml({
       + `<link><type>${CONTENT_LINK_TYPE}</type><target>${collection}</target></link>`
       + `<CollectionId>${collection}</CollectionId>`
       + dataSourceXml(section, dataSource)
-      + (withItems ? editorialItemsXml(items) + applicationsXml(items, now) : '')
+      + (withItems
+        ? editorialItemsXml(items) + applicationsXml(items, now, { mediaInstance: offerMediaInstance })
+        : '')
       + `</${PANE_ELEMENT}>`;
   }).join('');
   return `<${PANE_CONTAINER}>${panes}</${PANE_CONTAINER}>`;
@@ -666,7 +690,8 @@ export function normalizePageFormat(value) {
 export function buildStorePageFeed({
   sections = [], selfHref = '/', id = 'storePage', title = 'List Of Items',
   templateName, templateType, typeKeyForm, pageFormat, dataSource = null,
-  paneType = '', paneSubType = '', paneBackgroundImage = false, now = new Date(),
+  paneType = '', paneSubType = '', paneBackgroundImage = false, offerMediaInstance = false,
+  now = new Date(),
 } = {}) {
   const format = normalizePageFormat(pageFormat);
   const stamp = feedStamp(now);
@@ -682,7 +707,7 @@ export function buildStorePageFeed({
       + `<index>${index + 1}</index>`
       + `<link><type>ApplicationCollection</type><target>${collection}</target></link>`
       + editorialItemsXml(items)
-      + applicationsXml(items, now)
+      + applicationsXml(items, now, { mediaInstance: offerMediaInstance })
       + '</a:entry>';
   }).join('');
 
@@ -720,7 +745,7 @@ export function buildStorePageFeed({
     + `<${STORE_PAGE_ROOT} xmlns:a="${ATOM_NS}" xmlns:os="${OPEN_SEARCH_NS}" xmlns="${CATALOG_NS}">`
     + panesXml({
       sections, withItems: format === 'panes', now, dataSource, paneType, paneSubType,
-      backgroundImage: paneBackgroundImage,
+      backgroundImage: paneBackgroundImage, offerMediaInstance,
     })
     + templateBlockXml({ templateName, templateType, typeKeyForm })
     + withoutDeclaration
@@ -883,7 +908,7 @@ export function buildStoreConfiguration({
  */
 export function buildApplicationListFeed({
   apps = [], selfHref = '/', id = 'apps', title = 'List Of Items', now = new Date(),
-  entryRank = null, entryTitle = true,
+  entryRank = null, entryTitle = true, mediaInstance = false,
 }) {
   const stamp = feedStamp(now);
   const impression = impressionId(`${id}:${stamp}`);
@@ -892,6 +917,6 @@ export function buildApplicationListFeed({
   return feedHeader({
     selfHref, updated: stamp, title, id, impression, templateName: null,
   }) + apps.map((app, index) => applicationEntryXml(app, now, impression, {
-    rank: rankFor(index), entryTitle,
+    rank: rankFor(index), entryTitle, mediaInstance,
   })).join('') + feedFooter();
 }

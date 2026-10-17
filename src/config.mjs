@@ -96,6 +96,7 @@ const DEFAULTS = {
       // with a known confound, described where it is served in
       // src/store/protocol.mjs - it is not a one-variable change.
       paneBackgroundImage: false,
+      offerMediaInstance: false,
       serve: 'generated',
       archiveFile: 'src/store/fixtures/archive/real-hub-page-20130813.xml',
     },

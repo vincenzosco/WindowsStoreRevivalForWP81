@@ -1602,6 +1602,23 @@ Each one changes **a single variable**, and each names the value it replaced so 
   the next step and cannot be guessed: a transport code (`0x80072EFD`, `0x80072EE7`) would be a host the lab never saw, and
   the DNS log holds no such name; an account code (`0x80048820`) is the local gate, and the way through it is a real
   sign-in, not an interception.
+- **The code that came, and what it points at** `0x80070057` - `E_INVALIDARG` - and then the sign-in message. That is the **same code**
+  the home page produced at `14:25-14:26` when the image host was answering `502` (`F-031`), and the fifth distinct verdict this client
+  has given on this lab's documents (`0xc00cee23`, `88675309`, silence, `0x80070057`, `0x80070057`). An invalid *argument* is what a
+  client throws when it builds a request from a model that is missing a field it needs - not what a server error looks like - and the
+  sign-in message came **after** it, which makes the account wall a consequence here rather than the cause.
+- **The field that would be missing, and the probe that is now armed** The archived response of the real service puts
+  `<mediaInstanceId>` immediately after `<offerId>` in **every** offer, and the client logs the pair it works with when it handles one:
+  `wszLicenseType '%S' wszMediaInstanceId '%S'` (`F-017`). This lab has never written that element - when the v9 *application list*
+  archive was read it carried none, and the entry shape was copied from it (`F-022`) - but a list and an install are not the same
+  consumer, and an install built from an offer with a licence type and no media instance is exactly the shape that throws
+  `E_INVALIDARG`. So `livestore.protocol.offerMediaInstance` is **armed** (`true`): every offer on every surface - list, detail, page -
+  now carries `<mediaInstanceId>urn:uuid:…</mediaInstanceId>` with a guid derived from the app (`media:<app id>`), and
+  `x-lab-offer-media-instance: guid` says so on the wire. 34 offers, 34 media instances on the served page; the detail response 1965 bytes,
+  up from 1885. **This is a hypothesis with a test, not a finding.** The reading is the next tap: if `0x80070057` turns into a request,
+  the field was the missing one and the capture will name the host the install asks for; if it stays, the field is not the cause and the
+  next candidate is the offer's `paymentTypes`/`store` pair. The guid is minted here, so a licensing step downstream would reject it -
+  the test is only whether the client gets past `E_INVALIDARG` to ask someone.
 - **What to measure next, in order** 1) the screen: does the detail page draw, and what does the install control
   do - this decides whether the wall is the local account check or the missing model, and the two have opposite
   fixes. 2) If the client does show a sign-in path, `login.live.com` is **alive on the real network** and
