@@ -955,6 +955,20 @@ export class MitmProxy {
         return;
       }
 
+      if (pathname === `${ADMIN_PREFIX}images`) {
+        // Counted in the handler, not read out of the capture: the question "did the
+        // 502s become 200s" should not depend on capture being on, on a session that
+        // survived, or on somebody parsing JSONL. A count of responses is all this
+        // can say - whether the device drew them is the screen's answer.
+        const handler = (this.router?.handlers || []).find((entry) => entry.name === 'store-images');
+        if (!handler || typeof handler.describeStats !== 'function') {
+          json(501, { error: 'the store-images handler is not installed' });
+          return;
+        }
+        json(200, { session: prettyPath(this.capture.sessionDir), ...handler.describeStats() });
+        return;
+      }
+
       if (pathname === `${ADMIN_PREFIX}captures`) {
         const limit = Number(new URL(requestPath, 'http://lab').searchParams.get('limit') || 50);
         const lines = (await fsp.readFile(this.capture.indexPath, 'utf8').catch(() => ''))
@@ -986,6 +1000,7 @@ export class MitmProxy {
           `GET  ${ADMIN_PREFIX}status`,
           `GET  ${ADMIN_PREFIX}ca.crt`,
           `GET  ${ADMIN_PREFIX}ca.der`,
+          `GET  ${ADMIN_PREFIX}images`,
           `GET  ${ADMIN_PREFIX}captures?limit=50`,
           `POST ${ADMIN_PREFIX}reload`,
         ],

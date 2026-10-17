@@ -1103,6 +1103,25 @@ async function main() {
     ))?.body.equals(png),
     'one placeholder, not a per-guid invention');
 
+  // The counters behind `GET /__lab/images`. They exist because the only other way to
+  // know how many icons this lab served was to read a capture file, and a count that
+  // depends on capture being on is a count that disappears exactly when it is needed.
+  // The handler is read here after three answers it gave above: one refused for an
+  // unlisted host, one 200, and one 200 for another guid.
+  const imageHandler = probeRouter.handlers.find((handler) => handler.name === 'store-images');
+  const imageCounters = imageHandler?.describeStats ? imageHandler.describeStats() : null;
+  check('images: the handler counts what it served, for /__lab/images',
+    imageCounters?.served >= 2
+      && imageCounters.distinctGuids >= 1
+      && imageCounters.refusedUnlisted >= 1
+      && imageCounters.byImagetype.icon_small >= 1
+      && imageCounters.bytes === png.length
+      && imageCounters.shape === '48x48 field+frame+X',
+    imageCounters
+      ? `served=${imageCounters.served} guids=${imageCounters.distinctGuids}`
+        + ` unlisted=${imageCounters.refusedUnlisted} types=${Object.keys(imageCounters.byImagetype).join(',')}`
+      : 'no describeStats on the handler');
+
   // The placeholder used to be a flat square of #2E355C, and that made its one
   // observation unreadable: a client painting the bitmap and a client painting its
   // own empty-image background produce the same coloured slot. What the bytes have
@@ -1676,6 +1695,27 @@ async function main() {
       `x-lab-pane-type=${home.headers['x-lab-pane-type']}`
         + ` panes=${home.body.split('<Type>Collection</Type>').length - 1}/${sections.length}`);
 
+    // The next single variable after F-032, asserted on both arms so it can be armed
+    // and un-armed without a device run: off must leave the page exactly as every
+    // earlier delivery (no <BackgroundImage> at all), on must put one guid-bearing
+    // block inside every pane, distinct per pane, with the header saying which arm
+    // the delivery belongs to. The guid is derived from the section title, so a
+    // request the client later makes for it is recognisable as this lab's own.
+    config.livestore.protocol.paneBackgroundImage = true;
+    const artPage = await httpsViaProxy({ ...target, requestPath: storeQuery, method: 'GET' });
+    const artBlocks = [...artPage.body.matchAll(/<BackgroundImage><id>urn:uuid:([0-9a-f-]{36})<\/id><\/BackgroundImage>/g)];
+    const artIds = new Set(artBlocks.map((match) => match[1]));
+    config.livestore.protocol.paneBackgroundImage = false;
+    check('store protocol: the pane background is absent when off and one guid per pane when on',
+      !home.body.includes('<BackgroundImage><id>')
+        && home.headers['x-lab-pane-background'] === 'none'
+        && artPage.status === 200
+        && artPage.headers['x-lab-pane-background'] === 'guid'
+        && artBlocks.length === sections.length
+        && artIds.size === sections.length,
+      `off=${home.headers['x-lab-pane-background']} on=${artPage.headers['x-lab-pane-background']}`
+        + ` blocks=${artBlocks.length}/${sections.length} distinct=${artIds.size}`);
+
     // A pane with no data source is a pane the client downloads nothing for: the
     // binary reads /DataSource/Type and /DataSource/Url per pane and fetches the
     // content from there (@46528, next to /StorePage, /feed, /entry). So the page
@@ -1793,15 +1833,34 @@ async function main() {
       reload.status === 501 || reloadJson?.reloaded === true,
       `status=${reload.status}`);
 
+    // The image counters, read over HTTP the way an operator reads them, so the
+    // endpoint is tested rather than the object behind it.
+    const imagesAdmin = await plainHttp(`http://127.0.0.1:${PROXY_PORT}/__lab/images`);
+    let imagesJson = null;
+    try { imagesJson = JSON.parse(imagesAdmin.body); } catch { imagesJson = null; }
+    const countedTypes = imagesJson ? Object.values(imagesJson.byImagetype || {}).reduce((a, b) => a + b, 0) : -1;
+    check('admin: /__lab/images counts the images served without reading a capture',
+      imagesAdmin.status === 200
+        && typeof imagesJson?.served === 'number'
+        && countedTypes === imagesJson.served
+        && imagesJson.bytes === 279
+        && Boolean(imagesJson.shape)
+        && Boolean(imagesJson.note),
+      imagesJson
+        ? `status=${imagesAdmin.status} served=${imagesJson.served} types=${countedTypes} enabled=${imagesJson.enabled}`
+        : `status=${imagesAdmin.status} no JSON`);
+
     // --- capture ----------------------------------------------------------
     await capture.flush();
     const indexLines = (await fsp.readFile(capture.indexPath, 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
     const decisions = indexLines.map((e) => e.decision);
     // One entry per intercepted request made above:
     // 4 rule cases + 1 plain-HTTP case + 1 direct-TLS case + 5 store-handler
-    // cases + 6 store-protocol cases + 1 fetched pane source.
+    // cases + 7 store-protocol cases + 1 fetched pane source. The seventh
+    // store-protocol case is the page fetched with the pane background armed, which
+    // is the only way to assert that a config value reaches the wire.
     check('capture: every intercepted exchange was indexed',
-      indexLines.length === 18,
+      indexLines.length === 19,
       `entries=${indexLines.length} decisions=${JSON.stringify(decisions)}`);
     check('capture: decisions are labelled per rule',
       decisions.some((d) => d === 'passthrough:passthrough-endpoint')
@@ -1811,9 +1870,10 @@ async function main() {
       JSON.stringify(decisions));
     check('store: handler decisions are labelled with the handler name',
       decisions.includes('store:store-health') && decisions.includes('store:catalog-bridge')
-        // Six page/feed requests plus the pane source the page itself named, which
-        // the suite fetched back through the proxy the way the device would.
-        && decisions.filter((d) => d === 'store:store-protocol').length === 7,
+        // Seven page/feed requests - the last one with the pane background armed -
+        // plus the pane source the page itself named, which the suite fetched back
+        // through the proxy the way the device would.
+        && decisions.filter((d) => d === 'store:store-protocol').length === 8,
       JSON.stringify(decisions.filter((d) => d.startsWith('store:'))));
     const firstCapture = indexLines[0];
     check('capture: request and response bodies are stored',

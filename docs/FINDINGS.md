@@ -1542,12 +1542,23 @@ Each one changes **a single variable**, and each names the value it replaced so 
   pane parser *requires* any of them - and the archived page carries **no `<Panes>` at all**, its items hang
   directly off the root as `a:entry`, so the archive cannot settle it. That is a fact about the document, recorded
   as one: four fields absent, none of them yet shown to be wanted.
+- **A session with the pane source armed, and not one icon follows** `captures/session-2026-10-17_14-50-41`, the open at
+  `14:50:50` (`x-wp-device-id 40752FED…`, the measured handset): page `200`, four retries of `/v8/catalog/queries` `502`,
+  then `GET /v9/catalog/apps` `200` - the URL the page's own pane named - then **six** fetches of one app detail
+  (`0e26aad2…`, Corte dei Vicini), then the page again. **Zero requests to the image host.** In the same configuration the
+  *search* result list drew 420 image requests (`F-031`), so the client reads the pane's feed, resolves an entry out of it
+  and asks for its detail, while asking for no icon at all: the same entries carry icons when drawn from the search list and
+  none when drawn from the pane source. That is "the page's items are not rendered" seen from the images side, and it is
+  the second independent reading of it - the first being that no pane source was requested at all before the data source was
+  armed (`F-019`).
 - **The candidates left, ranked, with what each rests on**
   1. **A pane field that is wanted and absent** - `BackgroundImage/id` first, because a hub tile draws art and the
-     pane map names it (@14024). Evidence that it is required: none. Evidence that it is used at all: the name is
-     in the pane's own property map. This is the next probe and it is one variable: write a
-     `<BackgroundImage><id>urn:uuid:…</id></BackgroundImage>` into each pane with a guid this lab mints, which the
-     image endpoint now answers for any guid (`F-031`).
+     pane map names it (@14024). Evidence that it is required: none. Evidence that it is used at all: the name is in the
+     pane's own property map. **The probe is built and off**: `livestore.protocol.paneBackgroundImage` writes
+     `<BackgroundImage><id>urn:uuid:…</id></BackgroundImage>` into every pane (guid derived from the section title, so it is
+     stable and distinct per pane), the image endpoint answers whatever guid it is handed, and the page response carries
+     `x-lab-pane-background: guid|none` so no capture can be read against the wrong arm. Arming it is `true` plus
+     `POST /__lab/reload`, and it changes the pane and nothing else.
   2. **The pane's `Type` value.** `Collection` was chosen from the parser's literal pool (@29010-@29064) and the
      phone's own UI asset names; it is a token, not an observation. A wrong token that a client *compares* leaves
      the rest of the document unread, which is exactly the silence observed.

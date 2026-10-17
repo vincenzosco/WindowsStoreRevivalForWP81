@@ -97,7 +97,10 @@ change can never be mistaken for a page-caused one. The placeholder carries a **
 frame and a diagonal cross on the dark field - on purpose: a flat coloured square cannot tell a
 client that painted this lab's bitmap from one that painted its own empty-image background, and
 the first version of this handler was flat. If the mark appears on the handset the bitmap is
-drawn; if only the colour does, it is not. See F-031.
+drawn; if only the colour does, it is not. `GET /__lab/images` counts what the lab served - per
+`imagetype`, distinct guids, the last request - so "the 502s became 200s" is answerable without
+reading a capture. It is a count of responses and says nothing about what the handset drew.
+See F-031.
 
 The handset carries a **second** store client, and it works: a community app whose own cache
 holds the JSON answers of `store-api.live.net.co` (`/apps`, `/games`, `/apps/search?q=`,
@@ -160,6 +163,13 @@ exactly, carried under a namespace prefix the parser's string does not have, or 
 does the same for the first pane's own field map and for the archived real response. `missing`
 is the only state that is a defect on the evidence, and today there are none: all 22 required
 paths are carried, 12 of them under the atom prefix the real service also used (F-032).
+
+The next single variable is already built and off: `livestore.protocol.paneBackgroundImage`
+writes `<BackgroundImage><id>urn:uuid:…</id></BackgroundImage>` into every pane - the one path
+of the pane's own field map a hub tile would draw with, and the image endpoint answers whatever
+guid it is handed. Arming it needs two steps (`true` in `config.json`, then
+`POST /__lab/reload`) and changes one thing: the pane. `x-lab-pane-background: guid|none` on the
+page response says which arm a delivery belongs to.
 
 ### The vocabulary, read from the phone
 

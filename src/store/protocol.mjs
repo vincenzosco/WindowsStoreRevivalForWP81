@@ -79,6 +79,11 @@ function protocolSettings(config) {
     // the one piece of evidence there is (`inv`, in the page parser's literal pool).
     paneType: '',
     paneSubType: '',
+    // Whether each pane carries `/BackgroundImage/id`, the one absent path of the
+    // pane's field map a tile would draw with. Off by default: arming it is the next
+    // single variable after F-032, and a page that changed without being asked to
+    // would make every earlier delivery incomparable.
+    paneBackgroundImage: false,
     pageSize: 25,
     // A "store page cookie" is the only header the client reads back from a
     // response: `WPSHeaderHandler::AddStorePageCookie` / `::GetStorePageCookie`
@@ -621,6 +626,7 @@ export function createStoreProtocol(config) {
           dataSource,
           paneType: settings.paneType,
           paneSubType: settings.paneSubType,
+          paneBackgroundImage: Boolean(settings.paneBackgroundImage),
           now,
         });
         // The probe: the same page, one construct renamed. Refused rather than
@@ -648,6 +654,9 @@ export function createStoreProtocol(config) {
           'x-lab-template-types-known': templateTypesForPageType(pageType).join(',') || 'none',
           'x-lab-pane-sources': dataSource ? dataSource.type : 'none',
           'x-lab-pane-type': String(settings.paneType || '').trim() || 'none',
+          // Which of the pane's fields this delivery carried, so an experiment can never
+          // be read off a capture that does not say what was armed.
+          'x-lab-pane-background': settings.paneBackgroundImage ? 'guid' : 'none',
           ...(templateCheck.ok ? {} : { 'x-lab-template-type-warning': templateCheck.reason }),
         });
       }

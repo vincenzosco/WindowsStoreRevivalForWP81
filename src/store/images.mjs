@@ -150,10 +150,78 @@ function hostMatches(host, patterns) {
   });
 }
 
+// How many guids are remembered. The client asks for one per entry it draws and
+// repeats the same guids on every redraw, so this is a few dozen in practice; the
+// cap exists so a client that invented a guid per request cannot grow this process.
+const MAX_TRACKED_GUIDS = 4096;
+
+/** The guid in `/v8/images/<guid>?imagetype=…`, or the last path segment. */
+function guidOf(requestPath) {
+  const pathname = String(requestPath || '/').split('?')[0];
+  const segments = pathname.split('/').filter(Boolean);
+  return segments[segments.length - 1] || '(none)';
+}
+
 export function createStoreImages(config) {
+  // Counters, because until now the only way to know how many icons this lab served
+  // was to read a capture file - which needs capture on, a session that survived, and
+  // somebody to parse JSONL. These live in the process and are readable at
+  // `GET /__lab/images`, so "the 420 requests became 200s" is answerable while the
+  // device is still on the screen. They are a count of responses, not of what the
+  // device drew: only the screen says that.
+  const stats = {
+    served: 0,
+    refusedUnlisted: 0,
+    refusedMethod: 0,
+    byImagetype: {},
+    guids: new Map(),
+    droppedGuids: 0,
+    lastAt: null,
+    lastPath: null,
+  };
+
+  const noteServed = (ctx) => {
+    stats.served += 1;
+    stats.lastAt = new Date().toISOString();
+    stats.lastPath = String(ctx.path || '');
+    const imagetype = new URLSearchParams(String(ctx.path || '').split('?')[1] || '').get('imagetype') || '(none)';
+    stats.byImagetype[imagetype] = (stats.byImagetype[imagetype] || 0) + 1;
+    const guid = guidOf(ctx.path);
+    if (stats.guids.has(guid)) {
+      stats.guids.set(guid, stats.guids.get(guid) + 1);
+    } else if (stats.guids.size < MAX_TRACKED_GUIDS) {
+      stats.guids.set(guid, 1);
+    } else {
+      stats.droppedGuids += 1;
+    }
+  };
+
   return {
     name: 'store-images',
     description: 'Answers the Store image CDN with a placeholder PNG instead of a 502.',
+
+    /** The counters as JSON, for `GET /__lab/images`. */
+    describeStats() {
+      const settings = imageSettings(config);
+      const guids = [...stats.guids.entries()].sort((a, b) => b[1] - a[1]);
+      return {
+        enabled: Boolean(settings.enabled),
+        hosts: settings.hosts,
+        served: stats.served,
+        distinctGuids: stats.guids.size,
+        refusedUnlisted: stats.refusedUnlisted,
+        refusedMethod: stats.refusedMethod,
+        byImagetype: { ...stats.byImagetype },
+        lastAt: stats.lastAt,
+        lastPath: stats.lastPath,
+        bytes: PLACEHOLDER_PNG.length,
+        shape: `${SIZE}x${SIZE} field+frame+X`,
+        // Bounded: the count above is exact, the list is the busiest guids only.
+        guids: guids.slice(0, 100).map(([guid, count]) => ({ guid, count })),
+        guidsDropped: stats.droppedGuids,
+        note: 'A count of responses, not of what the device drew: the screen is the only witness to that.',
+      };
+    },
 
     match(ctx) {
       const settings = imageSettings(config);
@@ -163,6 +231,7 @@ export function createStoreImages(config) {
 
     async handle(ctx) {
       if (!isInterceptedHost(config, ctx.host)) {
+        stats.refusedUnlisted += 1;
         return {
           status: 421,
           headers: { 'content-type': 'application/json; charset=utf-8' },
@@ -170,12 +239,15 @@ export function createStoreImages(config) {
         };
       }
       if (ctx.method !== 'GET' && ctx.method !== 'HEAD') {
+        stats.refusedMethod += 1;
         return {
           status: 405,
           headers: { 'content-type': 'application/json; charset=utf-8' },
           body: Buffer.from(JSON.stringify({ error: 'method_not_allowed' })),
         };
       }
+
+      noteServed(ctx);
 
       return {
         status: 200,

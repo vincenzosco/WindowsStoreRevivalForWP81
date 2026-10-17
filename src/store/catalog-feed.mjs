@@ -478,7 +478,10 @@ function applicationsXml(items, now) {
  * @param {string} [options.paneType] what a pane *is*, when the caller wants it said
  * @param {string} [options.paneSubType]
  */
-function panesXml({ sections, withItems = false, now, dataSource = null, paneType = '', paneSubType = '' }) {
+function panesXml({
+  sections, withItems = false, now, dataSource = null, paneType = '', paneSubType = '',
+  backgroundImage = false,
+}) {
   const panes = sections.map((section, index) => {
     const collection = uuidForCollection(section.title || `section-${index + 1}`);
     const items = section.items || [];
@@ -487,6 +490,7 @@ function panesXml({ sections, withItems = false, now, dataSource = null, paneTyp
       + `<Id>${collection}</Id>`
       + `<Title>${title}</Title>`
       + paneKindXml(paneType, paneSubType)
+      + paneBackgroundXml(section, backgroundImage)
       + `<index>${index + 1}</index>`
       + `<title>${title}</title>`
       + `<link><type>${CONTENT_LINK_TYPE}</type><target>${collection}</target></link>`
@@ -496,6 +500,28 @@ function panesXml({ sections, withItems = false, now, dataSource = null, paneTyp
       + `</${PANE_ELEMENT}>`;
   }).join('');
   return `<${PANE_CONTAINER}>${panes}</${PANE_CONTAINER}>`;
+}
+
+/**
+ * The pane's background art, as the pane's own property map spells it:
+ * `/BackgroundImage/id` (@14024).
+ *
+ * WHY IT IS A SWITCH AND NOT ALWAYS ON. It is the next single variable: of the four
+ * paths in `PANE_FIELDS` the served pane does not carry, this is the one a hub tile
+ * would draw with, and the image endpoint answers for *any* guid this lab mints - so
+ * arming it changes the page and nothing else, and the screen answers whether art was
+ * required. Off leaves every page this lab has served before byte-identical (see
+ * `paneBackgroundImage` in config.json), because an experiment that cannot be un-armed
+ * is not an experiment.
+ *
+ * The id is derived from the section title, so it is stable across runs and distinct
+ * per pane - a request the client makes for it is recognisable in the capture as this
+ * lab's own guid rather than a real CDN one.
+ */
+function paneBackgroundXml(section, enabled) {
+  if (!enabled) return '';
+  const name = String(section.title || 'section');
+  return `<BackgroundImage><id>urn:uuid:${uuid5(`background:${name}`)}</id></BackgroundImage>`;
 }
 
 /**
@@ -640,7 +666,7 @@ export function normalizePageFormat(value) {
 export function buildStorePageFeed({
   sections = [], selfHref = '/', id = 'storePage', title = 'List Of Items',
   templateName, templateType, typeKeyForm, pageFormat, dataSource = null,
-  paneType = '', paneSubType = '', now = new Date(),
+  paneType = '', paneSubType = '', paneBackgroundImage = false, now = new Date(),
 } = {}) {
   const format = normalizePageFormat(pageFormat);
   const stamp = feedStamp(now);
@@ -692,7 +718,10 @@ export function buildStorePageFeed({
   const withoutDeclaration = feed.replace(/^<\?xml[^?]*\?>/, '');
   return '<?xml version="1.0" encoding="utf-8"?>'
     + `<${STORE_PAGE_ROOT} xmlns:a="${ATOM_NS}" xmlns:os="${OPEN_SEARCH_NS}" xmlns="${CATALOG_NS}">`
-    + panesXml({ sections, withItems: format === 'panes', now, dataSource, paneType, paneSubType })
+    + panesXml({
+      sections, withItems: format === 'panes', now, dataSource, paneType, paneSubType,
+      backgroundImage: paneBackgroundImage,
+    })
     + templateBlockXml({ templateName, templateType, typeKeyForm })
     + withoutDeclaration
     + `</${STORE_PAGE_ROOT}>`;

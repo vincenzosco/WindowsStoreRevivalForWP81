@@ -354,6 +354,7 @@ Se il body è compresso viene decompresso prima e rispedito in chiaro.
 |---|---|
 | `GET /__lab/` | dashboard live, si aggiorna ogni 3 s, con reload e filtro |
 | `GET /__lab/status` | stato completo: config attiva, statistiche, CA |
+| `GET /__lab/images` | conteggio delle immagini servite dal CDN (per `imagetype`, guids distinti, ultima richiesta): è un conteggio di risposte, non di cosa ha disegnato il telefono, e non dipende dalla cattura |
 | `GET /__lab/ca.crt` | scarica la CA in PEM |
 | `GET /__lab/captures?limit=N` | ultime N richieste intercettate |
 | `POST /__lab/reload` | rilegge `config.json` senza riavviare |
@@ -523,6 +524,13 @@ stesso per la mappa dei campi del primo pane e per la risposta archiviata del ve
 `assente` è l'unico stato che sulle prove è un difetto, e oggi non ce ne sono: tutti i 22 path
 richiesti sono portati, 12 dei quali sotto il prefisso atom che usava anche il vero servizio
 (F-032).
+
+La prossima variabile singola è già scritta ed è spenta: `livestore.protocol.paneBackgroundImage`
+mette `<BackgroundImage><id>urn:uuid:…</id></BackgroundImage>` in ogni pane - l'unico path della
+mappa del pane che un tile disegnerebbe, e il CDN delle immagini risponde a qualunque guid gli
+si passi. Accenderla sono due passi (`true` in `config.json`, poi `POST /__lab/reload`) e cambia
+una cosa sola: il pane. L'header `x-lab-pane-background: guid|none` sulla risposta della pagina
+dice a quale braccio appartiene una consegna.
 
 #### Il vocabolario, letto dal telefono
 
