@@ -1594,6 +1594,14 @@ Each one changes **a single variable**, and each names the value it replaced so 
   exists in the protocol: six detail fetches and no install surface is exactly what "the detail page yields no
   model" would look like from the network, and the capture cannot see the screen. Whether a button was there, was
   pressed, or opened a sign-in dialog is the operator's half of this measurement, and it is missing.
+- **The screen, as the operator read it - the half the capture cannot see** On the same run the install control answered
+  **"devi avere un account Microsoft"** and then a technical error whose code begins **`800…`**, not recorded in full at the
+  time. Two facts follow from that, and they are the reason this entry is worth keeping: the client **does** present an
+  install surface and a gate (so the detail page was not simply blank), and the gate **fails before asking anybody** -
+  which is the same statement as the empty network window, from the other side. Which family the code belongs to decides
+  the next step and cannot be guessed: a transport code (`0x80072EFD`, `0x80072EE7`) would be a host the lab never saw, and
+  the DNS log holds no such name; an account code (`0x80048820`) is the local gate, and the way through it is a real
+  sign-in, not an interception.
 - **What to measure next, in order** 1) the screen: does the detail page draw, and what does the install control
   do - this decides whether the wall is the local account check or the missing model, and the two have opposite
   fixes. 2) If the client does show a sign-in path, `login.live.com` is **alive on the real network** and
