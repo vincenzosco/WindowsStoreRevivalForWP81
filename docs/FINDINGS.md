@@ -1572,6 +1572,37 @@ Each one changes **a single variable**, and each names the value it replaced so 
   this document, or requires any of the four absent fields. Nothing here is a claim that the page *should* render:
   it is a statement of what the document contains, checked against what the binary says the client looks for.
 
+## F-033 An install attempt asks for nothing new: the account wall is not (yet) a network event
+
+- **Date** 2026-10-17 14:59-15:02 local · **Area** the install path, measured for the first time · **Method**
+  `npm run trace:install -- --device 192.168` on the running lab, print of every exchange from the handset and
+  every DNS query it made (`dns.logQueries` records all of them, hijacked or not), then the same window read by
+  timestamp from `captures/dns-queries-2026-10-17.jsonl`.
+- **What the handset did** `session-2026-10-17_14-57-05`, 18 exchanges from `40752FED…` at `192.168.0.137`:
+  page `200` at `14:59:55` (and again at `15:01:08`), four retries of `/v8/catalog/queries` `502`, `GET
+  /v9/catalog/apps` `200` (the pane's source), then **six** fetches of one app detail (`0e26aad2…`) between
+  `15:01:13` and `15:01:58` - and nothing else. **No licensing host, no account host, no package URL.**
+- **The DNS side, which is the part that would have shown a wall the lab does not answer** In that whole window
+  the handset resolved **five names**: `cdn.marketplaceedgeservice…` and `marketplaceedgeservice…` (twice each,
+  hijacked) and `discoveryservice.windowsphone.com` once (forwarded). Nothing for `login.live.com`, nothing for a
+  licence or purchase service, nothing for a download CDN. A request the lab cannot see cannot be the thing that
+  blocked the install.
+- **What that establishes, and what it does not** The "you must sign in to install" wall, in this configuration,
+  **does not produce a request**: whatever the client consulted, it consulted locally, and the only network effect
+  of the attempt was fetching the same detail document again. So interception cannot be the fix for this wall as
+  it stands - the client never gets far enough to ask anybody. It does **not** establish that no such request
+  exists in the protocol: six detail fetches and no install surface is exactly what "the detail page yields no
+  model" would look like from the network, and the capture cannot see the screen. Whether a button was there, was
+  pressed, or opened a sign-in dialog is the operator's half of this measurement, and it is missing.
+- **What to measure next, in order** 1) the screen: does the detail page draw, and what does the install control
+  do - this decides whether the wall is the local account check or the missing model, and the two have opposite
+  fixes. 2) If the client does show a sign-in path, `login.live.com` is **alive on the real network** and
+  deliberately not hijacked (E-004) - signing in is the one part of this chain that may still work, and it would
+  move the wall to the licensing call that follows it, which is the request worth having.
+- **Does not establish** That the app cannot be installed without an account, that Microsoft's licensing service is
+  reachable, or that a licence can be satisfied from this lab. Nothing in this entry is about signatures; it is
+  about who the phone talked to, and the answer is: only this lab.
+
 
 ## Open experiments, continued
 
