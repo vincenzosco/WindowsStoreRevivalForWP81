@@ -184,16 +184,32 @@ check('every declared template type is still at the offset the module cites',
 // inside an application, and it is the one the suite holds the served page to. The
 // paths recorded beside it as *not* page paths are checked here too, because a
 // drifting one of those would mean the two lists had been sorted wrongly.
-const pathLists = [
-  ...FEED_PATHS,
-  ...PAGE_PARSE_PATHS,
-  ...PATHS_NEAR_THE_PAGE_GRAMMAR.flatMap((group) => group.paths),
-];
+// Deduplicated, because six paths are declared twice on purpose: FEED_PATHS is the
+// short list the builder was written against, PAGE_PARSE_PATHS is the parser's own
+// run, and the second contains the first. Both citations are kept in the module -
+// they answer different questions - but checking the same entry twice only makes
+// the output look like it has twice as much evidence as it does.
+const pathLists = [];
+for (const entry of [...FEED_PATHS, ...PAGE_PARSE_PATHS, ...PATHS_NEAR_THE_PAGE_GRAMMAR.flatMap((g) => g.paths)]) {
+  if (pathLists.some((seen) => seen.path === entry.path && seen.parserOffset === entry.parserOffset)) continue;
+  pathLists.push(entry);
+}
 for (const entry of pathLists) {
-  const found = parser.runs.find((run) => run.text === entry.path);
-  check(`parser walks ${entry.path}`,
-    Boolean(found) && found.offset === entry.parserOffset,
-    found ? `@${found.offset}` : 'not found');
+  // Looked up **by the offset the module cites**, not by the first run that carries
+  // that text. `/title` and `/content` are each spelled in more than one place in
+  // this binary - the page-grammar run, and an earlier config - so a first-match
+  // lookup reports drift for a citation that is exactly right, which is what it did
+  // the first time these paths were checked against the phone. A second occurrence
+  // is not a failure; it is worth printing, because it is the reason the offset is
+  // in the module rather than just the path.
+  const here = parser.runs.find((run) => run.offset === entry.parserOffset);
+  const elsewhere = parser.runs.filter((run) => run.text === entry.path && run.offset !== entry.parserOffset);
+  const correct = Boolean(here) && here.text === entry.path;
+  check(`parser walks ${entry.path}`, correct,
+    correct
+      ? `@${entry.parserOffset}${elsewhere.length ? ` (same text also at ${elsewhere.map((r) => `@${r.offset}`).join(', ')})` : ''}`
+      : `the module cites @${entry.parserOffset}, which holds ${JSON.stringify(here ? here.text : null)}`
+        + (elsewhere.length ? ` - the path itself is at ${elsewhere.map((r) => `@${r.offset}`).join(', ')}` : ''));
 }
 
 const typeKey = parser.runs.find((run) => run.text === TEMPLATE_GRAMMAR.typeKey);

@@ -10,6 +10,21 @@ described by about six settings in `config.json` (`pageFormat`, `templateType`, 
 `hubTemplate`, `pageSize`, `catalogFile`), and every one of them changes the bytes the device
 receives. Two at once and the device's answer belongs to neither.
 
+Two more settings describe the **application list** rather than the page, and neither of them can
+move the page's bytes: `appListRank` (the `<k>` the first entry carries; `''` writes none) and
+`appListEntryTitle` (the bare `<title>` a list entry used to carry and neither archived feed entry
+has). They were armed from `src/store/fixtures/archive/real-apps-feed-*.xml` - see F-021 and F-022 in
+[`FINDINGS.md`](FINDINGS.md), and `applicationEntryXml` in `src/store/catalog-feed.mjs`.
+
+Two switches describe endpoints rather than the page, and both are off in code so that a config which
+does not mention them behaves as the lab did before: `serve: "control-broken"` answers the page
+endpoints with a deliberately unparseable body (`controlFile`), and `configuration.enabled` answers
+the `/v8/Configuration/Stores/...` requests the phone makes before the page - which, with it off,
+fall through to passthrough and come back `502 upstream_loop`. Read what each is for, and what it
+does **not** establish, in `FINDINGS.md` under E-008 and E-009. The control refuses to serve a
+fixture that has been repaired, so a green suite is the only proof that the control is still a
+control.
+
 Changing a setting needs **no restart**: the protocol reads its settings and its catalog file on
 each request.
 
@@ -22,15 +37,18 @@ curl -X POST http://<lab address>:8899/__lab/reload
 
 | Command | What it proves | Needs |
 | --- | --- | --- |
-| `npm run selftest` | 99 end-to-end checks: the lab's own behaviour, the page's shape, the mass-storage registry bytes, and that the page carries every path of the parser's page grammar | nothing |
+| `npm run selftest` | 128 end-to-end checks: the lab's own behaviour, the page's shape, the application list's entry shape, the configuration answer, the malformed-page control, the mass-storage registry bytes, that the page carries every path of the parser's page grammar, and that a capture is attributed to the right client and device | nothing but a working upstream resolver - one check forwards `example.com` to the real network and times out if it is down (footgun 9) |
 | `npm run read-vocabulary` | One check per name and path in `src/store/vocabulary.mjs` - page types, template types, the parser's whole page-grammar run, every byte offset - still present on the phone. The tool prints the count | phone in mass storage, elevated |
 | `npm run store:page` | What the page *carries* right now, read back from the file that was written | nothing |
 | `npm run doctor` | One-screen state: config, listeners, CA, device traffic, the next step | lab running |
 | `npm run watch` | Live device-only traffic, answered 200s and refused handshakes named | lab running |
 | `npm run rehearse` | The whole chain against the real host names, without the device | nothing |
 | `npm run make-rootreg -- --verify` | The generated registry blob is byte-identical to what Windows writes | nothing |
-| `npm run analyze` | Protocol report from the last capture session | a capture |
-| `powershell -File tools/phone-readout.ps1` | What the device kept (`EdmCache`), the crash drop under `Public\Documents\Debug`, the ACLs that decide what stays out of reach, and everything under `Data` touched since `-Since` | phone in mass storage, **elevated** |
+| `npm run analyze` | Protocol report from the last capture session: **who asked** (per client address, this PC marked) and **which device** (per `x-wp-device-id`), then the endpoints with the clients that reached them | a capture |
+| `npm run sequence` | What one Store open looked like **in order**, per device: every exchange, then the counts the two open experiments are read by - configuration requests per store with their retries, page deliveries, and what came after the first page. `--session <name>`, `--device <id prefix>`, `--compare <a> <b>`, `--json`. This is the reading `analyze` cannot give: a census says who asked, not what happened next | a capture |
+| `powershell -File tools/find-store-config.ps1` | Where the `/v8/Configuration` URL is built: byte search (ASCII and UTF-16LE) of the mounted volume for `mpcVersion`, `OEMStores`, `MOStores`, `v8/Configuration`, `LKGOEMStoreConfigOverride` and `marketplaceedgeservice`, every hit with its offset, every unreadable file named. Needed because `ZMarketplace.dll` holds none of those tokens (E-009) | phone in mass storage; `-Deep` also walks `Data\Users\Public` and the Unistore cache |
+| `npm run analyze -- --all-sessions` | The same census over every session at once, plus `captures/census-report.md` - the reading that answers "how many devices are in this capture" (F-023) | a capture |
+| `powershell -File tools/phone-readout.ps1` | What the device kept (`EdmCache`, each entry with size, SHA-256 and its `<a:updated>` values), the crash drop under `Public\Documents\Debug`, the ACLs that decide what stays out of reach, and everything under `Data` touched since `-Since`. Its first section also prints **which volume it chose, and on what evidence** - read that line, and the `Accesso negato` lines, before the counts (footguns 7, 8) | phone in mass storage, **elevated** |
 
 Run `npm run doctor` first when something looks broken: it reports the missing piece by name
 instead of leaving you to infer it, and it distinguishes "the device never reached us" from
@@ -120,12 +138,15 @@ scheduled task left behind after an elevated read.
 4. **A capture holds this PC's own traffic as well as the device's.** `npm run rehearse` and every replay
    run through the lab and land in `captures/`, and the aggregate report counts them: 75 of the 113
    exchanges in the 2026-10-15 session were ours, and reading the summary alone made the device look like
-   it was asking for six hosts it never asked for (F-012). **Sort before reading**, by `client.address`
-   (the lab's own address means us) and by `user-agent` (`wp8-store-lab-rehearsal` means us, `ZDM/4.0;
-   Windows Mobile 8.1` means the Store client, `Windows Phone Search` and `IEMobile` mean other system
-   components). `npm run watch` does this for its DNS section - it drops every address of this machine -
-   but **not** for the exchanges it prints, and `npm run analyze` reports the aggregate, which is where the
-   confusion comes from. The user agents are in the capture index, not in the report.
+   it was asking for six hosts it never asked for (F-012). **Sort before reading**, by `client.address`:
+   every address of this machine means us, and it is the *only* field that does. **The user agent is not a
+   marker** - `tools/rehearse.mjs` replays the phone's requests with the phone's own agent, so 308 354 of
+   this PC's 329 304 exchanges carry `ZDM/4.0; Windows Mobile 8.1` and the marker this note used to point
+   at (`wp8-store-lab-rehearsal`) covers 338 of them (F-023, and `npm run selftest` now fails if the rule
+   is written the other way). `Windows Phone Search` and `IEMobile` are other *system components*, which is
+   a statement about what a request is for, not about which machine sent it. `npm run watch` drops this
+   machine's addresses in its DNS section; `npm run analyze` reports who asked, per address and per device
+   id, and is where the confusion came from when it reported only the aggregate.
 5. **Do not redirect the suite's output into `.selftest/`.** That directory is deleted by the run itself,
    so the log of a green run disappears with it. Write logs to `%TEMP%` or anywhere outside the tree.
 6. **Our own inspection tools build a slightly different page than the device is served.** `npm run
@@ -134,6 +155,37 @@ scheduled task left behind after an elevated read.
    link. The live handler echoes the real request, so this is a difference in what *we* look at, not in
    what the device gets - worth knowing before a difference in the bytes is read as a difference in the
    response.
+7. **A probe that discovers its own target can discover the wrong one, silently.** `tools/phone-readout.ps1`
+   scored `\Windows\System32\config\SOFTWARE` as a phone marker in an earlier version. A normal prompt
+   cannot see that path on this PC; an **elevated** one can - so the elevated run, the only mode the tool
+   exists for, matched this machine's own Windows installation, chose `C:`, and reported the phone's cache,
+   logs and ACLs as **absent**. *Absent reads as proof*, which is what made it dangerous rather than merely
+   wrong. The fix weights phone-only structure (`EdmCache` 3, `\Data\Users\Public` 2, `\Data\SharedData` 1,
+   the hive **0** - printed, never decisive), excludes `$env:SystemDrive` outright, and prints every
+   volume's score and the markers that produced it, so the choice can be falsified from the report alone
+   (F-016). Generalise: **when a tool guesses, make it print its evidence** - and when reading a report,
+   read the selection line before the counts.
+8. **An unreadable tree prints as an empty one.** `Data\SharedData` grants `Administrators` and nobody else,
+   and `Data\Users\DefApps\APPDATA` grants the app owner and not even Administrators (F-004), so a sweep run
+   from an ordinary prompt answers *0 files touched* whether or not anything moved: the file the elevated pass
+   found had been written inside the unelevated run's own window, in a directory that run reported as
+   `Accesso negato` (E-002). The tool prints that denial where the entries would be; the habit that matters is
+   **reading the permission line before the count line**, and never quoting a count taken from a tree the
+   prompt could not enumerate.
+9. **One suite check leaves the machine.** `dns: unrelated names still resolve normally` starts the lab's DNS
+   on a test port and asks it to forward `example.com`, which is deliberate - the point is that a name the lab
+   does *not* hijack is still resolvable through it - but it makes the suite non-hermetic: with the upstream
+   resolver slow or unreachable the check fails while nothing in the repository changed (seen once on
+   2026-10-15, passing on the next run, `99/99`). Re-run before debugging it, and read the detail line - it
+   prints the answers it got, so `no upstream available` reads differently from a wrong answer.
+10. **A reader that holds a capture in one string reports a capture that is not there.** `readFileSync(file,
+   'utf8')` on an index or a DNS log throws `ERR_STRING_TOO_LONG` once the file passes Node's maximum string
+   length, and every reader that caught that and fell back to a count answered **zero exchanges** - a session's
+   own record of what the device did, reported as "nothing intercepted yet", at exactly the sizes where the
+   capture matters. `captures/dns-queries-*.jsonl` is the file that does it first here (19 615 records over three
+   daily files). Use `readJsonl` from `src/capture.mjs`, which chunks and never joins the whole file; a torn last line
+   is skipped, a blank one ignored. Both readers in `tools/analyze-captures.mjs` are written that way, and
+   "the capture is empty" is now a sentence no tool in this repository can say without having read it.
 
 ## Data and what is safe to keep
 
@@ -143,6 +195,7 @@ scheduled task left behind after an elevated read.
 | `ca/` | The lab's CA, its **private key** and the leaf certificates | No |
 | `.selftest/` | Readouts, copies taken off the phone, comparison output | No — and ⚠️ **`npm run selftest` deletes this directory on every run** (`fs.rmSync` at the top of the suite). Never keep the only copy of anything here: re-take it with the command that produced it |
 | `%TEMP%\wp-massstorage\*.strings.txt` | String runs of the phone's `ZMarketplace.dll` and `ZuneAssets480x800.dll`, extracted by hand on 2026-10-15 | No - and it is the only copy of the client's strings that does not need the phone. Windows may clear `%TEMP%`; the durable route is `npm run read-vocabulary` with the phone mounted. Anything read out of these dumps belongs in `src/store/vocabulary.mjs`, with its offset, or it is gone with them |
+| `%TEMP%\wp-massstorage\readouts-<date>\*.txt` | Readout reports copied **out of `.selftest/`** before a suite run, hash-compared to the original - the 2026-10-15 pair is `unelevated-2059.txt` and `elevated-2105.txt` | No, and no more durable than `.selftest/` (Windows may clear `%TEMP%`): keep it as a courtesy to the next reader, never as the evidence. The evidence is the command and the numbers in `FINDINGS.md` |
 | `src/store/fixtures/` | The catalog and the archived page the page is built from | Yes - this is the baseline |
 | `docs/` | This register | Yes |
 

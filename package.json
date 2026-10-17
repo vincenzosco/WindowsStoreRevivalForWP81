@@ -14,6 +14,8 @@
     "selftest": "node tools/selftest.mjs",
     "dnsprobe": "node tools/dnsprobe.mjs",
     "analyze": "node tools/analyze-captures.mjs",
+    "sequence": "node tools/sequence.mjs",
+    "image:find": "node tools/find-in-image.mjs",
     "watch": "node tools/watch.mjs",
     "doctor": "node tools/doctor.mjs",
     "canary": "node tools/canary.mjs",

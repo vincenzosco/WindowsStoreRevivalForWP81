@@ -165,6 +165,8 @@ npm run watch          # mostra solo il traffico che NON viene da questo PC
 
 # 4. leggi cosa è passato
 npm run analyze
+#    oppure, su tutte le sessioni: chi ha chiesto e quale dispositivo
+npm run analyze -- --all-sessions
 
 # 5. aggiungi host alla lista di hijack in config.json, poi ricarica a caldo
 curl -X POST http://127.0.0.1:8899/__lab/reload
@@ -271,8 +273,16 @@ perché il tunnel è byte-per-byte e non viene decifrato.
 
 `npm run analyze` produce `captures/<session>/report.md` con:
 
+- **chi ha chiesto**: una riga per indirizzo client, con l'indirizzo di questo PC
+  marcato. `client.address` è l'unico campo che separa il dispositivo da questo
+  PC: **lo user-agent no**, perché `npm run rehearse` rimanda la richiesta con
+  l'agent del telefono (`ZDM/4.0; Windows Mobile 8.1`);
+- **quale dispositivo**: le stesse righe raggruppate per `x-wp-device-id`, che è
+  ciò che unisce due indirizzi dello stesso telefono e separa due telefoni
+  diversi. Il log DNS non ha identità, quindi ogni nome è riportato per
+  indirizzo e mai aggregato;
 - ogni endpoint distinto (`metodo host path`, con id normalizzati),
-  stato, content-type, decisione presa;
+  stato, content-type, decisione presa e **quali client** l'hanno raggiunto;
 - **gli host che il telefono ha risolto ma che non sono ancora hijackati**
   → è la lista da copiare in `config.json`;
 - **gli endpoint che falliscono** → è la lista di quello che va emulato.
@@ -374,7 +384,9 @@ passthrough**: un bug in un handler non rompe il telefono.
 | Handler | Cosa fa | Attivo di default? |
 |---|---|---|
 | `store-health` | Risponde su `<host intercettato>/__store/health` con un JSON che prova che la richiesta è arrivata al lab e la risposta è tornata indietro, senza toccare alcun backend | sì |
-| `store-protocol` | Risponde agli endpoint che il telefono chiama **davvero** per aprire lo Store (`/v9/catalog/storePages`, `/v8/catalog/hubs`, `/v[89]/catalog/apps`), nel formato XML che sa leggere | no, va abilitato |
+| `store-protocol` | Risponde agli endpoint che il telefono chiama **davvero** per aprire lo Store (`/v9/catalog/storePages`, `/v8/catalog/hubs`, `/v[89]/catalog/apps`, `/v8/catalog/updates` e - dal 2026-10-17 - `/v8/Configuration/Stores/...`), nel formato XML che sa leggere | no, va abilitato |
+| `store-images` | Risponde al CDN delle immagini (`cdn.marketplaceimages.../v8/images/<guid>`) con un PNG segnaposto: prima erano 502 iniettati dal lab, 420 in due minuti e mezzo su una sola ricerca (F-031) | no, va abilitato |
+| `store-live-client` | L'API JSON del **secondo** client presente sul telefono (l'app Live Store, non lo Store di sistema): `/apps`, `/games`, `/apps/search`, `/app/{id}`, `/me` - forma letta dalla sua cache (F-029, F-030) | no, va abilitato |
 | `catalog-bridge` | Serve il catalogo Live Store sotto un prefisso di path sugli host intercettati | no, va abilitato |
 
 ### Abilitare il bridge
@@ -419,14 +431,24 @@ Quello che il telefono chiede aprendo lo Store, parola per parola dalla cattura 
 Lumia:
 
 ```
+GET  http://marketplaceedgeservice.windowsphone.com/v8/Configuration/Stores/OEMStores/NOKIA
+         ?mpcVersion=8.10&os=8.10.14219.0&...          (e una chiamata equivalente su /MOStores/)
 GET  http://cdn.marketplaceedgeservice.windowsphone.com/v9/catalog/storePages
          ?typeId=DynamicHub.Main&os=8.10.14219.0&cc=IT&lang=it-IT&hw=402699266&dm=RM-941_eu_france_308&...
 POST http://marketplaceedgeservice.windowsphone.com/v8/catalog/updates?os=8.10.14219.0&...
 ```
 
-La prima è servita da `src/store/protocol.mjs`. La seconda resta in passthrough: la
-cattura mostra che il dispositivo prosegue verso la home page dopo il fallimento, e
-non esiste una cattura di una risposta a quella richiesta da copiare.
+Tutte e tre sono servite da `src/store/protocol.mjs`. La pagina è costruita nell'XML che
+il telefono legge; il controllo aggiornamenti riporta ogni SKU come invariato, perché qui
+non viene servito nessun pacchetto; le due chiamate di configurazione - che arrivano
+**prima**, e che il lab rispondeva `502 upstream_loop` perché nessuna rotta le
+intercettava - ricevono un documento `ConfigurationFile` nella grammatica del client
+stesso (`Domains`/`Domain`/`setting`), letta da un FFU e scritta con le impostazioni che
+la tabella degli endpoint del client sostituisce. Di quell'endpoint non esiste nessuna
+cattura, né nell'archivio né sul telefono: sono i *valori* a essere una risposta e non una
+ricostruzione, e il documento lo dichiara nei propri header (`x-lab-invented: 1`). Cosa
+resta aperto, e i due esperimenti che lo nominano, sono in
+[`docs/FINDINGS.md`](docs/FINDINGS.md) sotto E-008, E-009 e F-024.
 
 #### Perché va servita e non inoltrata
 
@@ -761,7 +783,9 @@ src/
   paths.mjs       path canonici (Windows: Documenti vs Documents)
   store/
     router.mjs    dispatch degli handler, con fallback sul passthrough
-    handlers.mjs  store-health + catalog-bridge
+    handlers.mjs  store-health + store-images + store-live-client + catalog-bridge
+    images.mjs    il CDN delle immagini, con un PNG segnaposto
+    live-client.mjs  l'API JSON del client Live Store, forma e campi da F-029
     fixtures/     catalogo di esempio per lavorare offline
 tools/
   selftest.mjs         95 verifiche end-to-end, incluse watch e canary
@@ -771,7 +795,8 @@ tools/
                        dispositivo prova lì (escludi `proxy.httpPort`, che il lab usa)
   doctor.mjs           stato completo in un comando: config, porte, CA, traffico del
                        dispositivo e prossimo passo (`npm run doctor`)
-  analyze-captures.mjs report del protocollo + suggerimenti di config
+  analyze-captures.mjs report del protocollo: chi ha chiesto, quale dispositivo,
+                       endpoint e suggerimenti di config (`--all-sessions` per il censimento)
   make-rootreg.mjs     blob di registro per la CA (con --verify)
   dnsprobe.mjs         query DNS grezza su porta arbitraria
 ca/                    generato: CA, leaf, .reg

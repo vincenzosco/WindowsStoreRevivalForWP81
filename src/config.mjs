@@ -80,12 +80,46 @@ const DEFAULTS = {
       // type is one variable. See PAGE_FORMATS in src/store/catalog-feed.mjs.
       pageFormat: 'storePage',
       pageSize: 25,
+      // The application list's own entry shape, read off the archived responses of
+      // the real service (src/store/fixtures/archive/real-apps-feed-*.xml).
+      // `appListRank` is the `<k>` the first entry carries; '' writes none, which
+      // is the feed this lab served before the archive was read. Both archived
+      // generations carry it, both start at 4, and the offset is observed rather
+      // than explained. `appListEntryTitle` is the bare `<title>` this lab used to
+      // write on each entry and that neither archived feed entry carries - the
+      // archived *page*'s `<application>` blocks do carry one, so the page is
+      // unaffected by this. See applicationEntryXml in src/store/catalog-feed.mjs.
+      appListRank: '',
+      appListEntryTitle: true,
       // 'generated' builds the page from the catalog; 'archive' answers the page
       // endpoints with a real archived response instead. That is an experiment
       // with a known confound, described where it is served in
       // src/store/protocol.mjs - it is not a one-variable change.
       serve: 'generated',
       archiveFile: 'src/store/fixtures/archive/real-hub-page-20130813.xml',
+    },
+    // The Store's image CDN. `cdn.marketplaceimages.windowsphone.com` is already
+    // in the hijack and mitm lists, so every icon request from the handset has been
+    // answered with this lab's own `502 upstream_loop` - 370 of them during one
+    // search on 2026-10-17 (F-031). On serves a generated 48x48 placeholder PNG
+    // instead, the same bytes for every guid and every `imagetype`. Off creeps the
+    // failure back; nothing else changes either way.
+    images: {
+      enabled: false,
+      hosts: ['*.marketplaceimages.windowsphone.com'],
+    },
+    // The JSON API of the *second* client on the handset - the Live Store app,
+    // not the system Store - read off that client's own cache (F-029). Off unless
+    // asked for, and arming it is two edits: this flag and the DNS hijack for
+    // `store-api.live.net.co`, because that client works today and a lab that
+    // took its catalog away by flipping one value would be a bad neighbour.
+    client: {
+      enabled: false,
+      host: 'store-api.live.net.co',
+      catalogFile: 'src/store/fixtures/demo-catalog.json',
+      // 0 answers the whole list in one document, which is what the cached
+      // responses show the real service doing (530 apps, 371 games).
+      limit: 0,
     },
   },
   rules: [],

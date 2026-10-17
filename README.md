@@ -41,8 +41,11 @@ with the phone in mass storage mode its own response cache is readable, and
 three earlier entries for the same request are 14 bytes each and read `{"probe":true}`, the
 body of an earlier probe listener, so the cache records whatever the client was served; that
 is what makes the identical one evidence. What it does not prove is that the page was
-*rendered* — a stored response is not a parsed one — and the app's own state would settle it
-but is out of reach this way: `Data\Users\DefApps\APPDATA` denies an elevated read too. The
+*rendered* — a stored response is not a parsed one — and the app's own state would settle it:
+that storage (`Data\Users\DefApps\APPDATA`) denies an elevated read, so it was opened the only
+way it can be, by taking ownership of it, copying it and putting the ACL back. It holds no Store
+state at all — the two package folders whose names promise some are empty — and it does hold a
+**second, working client's** cache and its JSON API, `store-api.live.net.co`. See F-029. The
 next single variable is named at the end of that section.
 
 The phone side is not an app any more, and that is a measurement rather than a preference. An
@@ -63,19 +66,42 @@ Design, decisions and the full measurement are in
 
 ## Serving the Store
 
-These two requests are what this phone makes to open the Store, verbatim from the capture of
-the Lumia:
+These are the requests this phone makes on the way to the Store home page, verbatim from the
+capture of the Lumia:
 
 ```
+GET  http://marketplaceedgeservice.windowsphone.com/v8/Configuration/Stores/OEMStores/NOKIA
+         ?mpcVersion=8.10&os=8.10.14219.0&...             (and an equivalent /MOStores/ call)
 GET  http://cdn.marketplaceedgeservice.windowsphone.com/v9/catalog/storePages
          ?typeId=DynamicHub.Main&os=8.10.14219.0&cc=IT&lang=it-IT&hw=402699266&dm=RM-941_eu_france_308&...
 POST http://marketplaceedgeservice.windowsphone.com/v8/catalog/updates
          ?os=8.10.14219.0&cc=IT&lang=it-IT&hw=...        (a BatchGetProductUpdatesRequest body)
 ```
 
-The first is answered by `src/store/protocol.mjs`, in the Zune catalog XML the phone reads.
-The second is left as passthrough: the capture shows the device going on to the home page
-after it fails, and no capture of an answer to it exists to copy.
+All three are answered by `src/store/protocol.mjs`. The page is built in the Zune catalog XML
+the phone reads; the update check reports every SKU it was asked about as unchanged, because
+nothing here serves a package; and the two configuration calls - which come *first*, and which
+the lab used to answer `502 upstream_loop` because no route matched them - get a
+`ConfigurationFile` document in the client's own grammar (`Domains`/`Domain`/`setting`), read
+out of an FFU and written with the settings the client's endpoint table substitutes. No
+capture of that endpoint exists, in the archive or on the phone, so the *values* are a reply
+and not a reconstruction, and the response says so (`x-lab-invented: 1`). What is open, and
+the two experiments that name it, is in [`docs/FINDINGS.md`](docs/FINDINGS.md) under E-008,
+E-009 and F-024.
+
+The Store's image CDN is answered too, since 2026-10-17: `cdn.marketplaceimages.windowsphone.com`
+has been hijacked all along, so every icon the handset asked for was answered with the lab's own
+`502` - 420 of them during one search. The `store-images` handler now returns a generated 48x48
+placeholder PNG instead, and nothing else: the page document is untouched, so an image-caused
+change can never be mistaken for a page-caused one. See F-031.
+
+The handset carries a **second** store client, and it works: a community app whose own cache
+holds the JSON answers of `store-api.live.net.co` (`/apps`, `/games`, `/apps/search?q=`,
+`/app/{id}`, `/me`, and a sign-in at `id.live.net.co`). That protocol is now served from the
+same catalog by the `store-live-client` handler - key names and value types read off the
+client's own cache, values from the fixture, every response carrying `x-lab-invented: 1` - off
+by default, and arming it takes three edits rather than one so that the working client cannot
+lose its catalog to a single flipped value. See F-029 and F-030.
 
 ### Where the format comes from
 
@@ -343,6 +369,7 @@ npm run selftest         # end-to-end checks, no device needed
 npm run rehearse         # replays the whole chain against the real host names
 npm run read-vocabulary  # re-reads the Store's templates out of the mounted phone
 npm run analyze          # report from the last capture session
+npm run analyze -- --all-sessions   # census: who asked, and which device
 ```
 
 ## Repository map
@@ -366,7 +393,8 @@ captures/                generated: sessions, bodies, DNS query log  (gitignored
 | `npm run selftest` | End-to-end self-test of the lab. |
 | `npm run rehearse` | Replay the phone's chain against the real names, including the page request over port 80. |
 | `npm run read-vocabulary` | Re-derive the Store vocabulary from the mounted phone and fail on drift. Add `:verbose` to see the string run the page types live in. |
-| `npm run analyze` | Report of the last capture session. |
+| `npm run analyze` | Report of the last capture session: who asked (per client address, this PC marked) and which device (per `x-wp-device-id`), then the endpoints with the clients that reached them. |
+| `npm run analyze -- --all-sessions` | The same census over every session at once. The one reading that says how many devices are in `captures/` - and it matters, because the user agent this PC replays with is the phone's own. |
 | `npm run canary` | Listen on ports the lab does *not* serve, to catch a wrong-port attempt. |
 | `npm run dnsprobe` | Raw DNS query against an arbitrary server/port. |
 | `npm run make-rootreg` | Generate `ca/install-root-ca.reg` for the phone registry. |

@@ -150,6 +150,98 @@ export const FEED_PATHS = [
 ];
 
 /**
+ * The page's panes are not containers that hold items: each one names a **data
+ * source** the client downloads on its own, after the page. Read from the same
+ * binary as everything above, and it is the one part of the page this lab has
+ * never served.
+ *
+ * Why it matters, in one line: a pane with no data source is a pane with nothing
+ * to fetch, which is what a page that parses and renders an empty hub looks like
+ * from the outside. `ProcessEntryFromType` is the function that turns a page into
+ * its objects, and its own literal pool holds `Create StoreObjects with FeedType =
+ * %S Url = %S` beside the four paths below - a feed type *and* a URL, per object.
+ * The download is a real request: `PendingListDownload::ParseFromStream`,
+ * `::OnDownloadAvailable` and `::OnRequestFailed` (@27772, @118552, @118596) are
+ * the download, its success and its failure.
+ *
+ * The spelling is the reading, case included, and it is *not* the case the page's
+ * entries use: a pane carries `/Id` and `/Title` where an entry carries `/id` and
+ * `/title`, and `/BackgroundImage/id` where an entry carries `/backgroundImage/id`.
+ * That difference is why both are written into a pane rather than one replacing
+ * the other - see `panesXml` in catalog-feed.mjs.
+ *
+ * Open, and named rather than filled in: the VALUES of `Type` and `SubType`. The
+ * path is settled; what a pane may put there is not, and the four tokens the
+ * client compares a *feed* type against (`DATA_SOURCE_TYPES`) are a different
+ * field from this one. Nothing is written for either yet.
+ */
+export const PANE_FIELDS = [
+  { path: '/Id', parserOffset: 7848 },
+  { path: '/Title', parserOffset: 7856 },
+  { path: '/Type', parserOffset: 7872 },
+  { path: '/SubType', parserOffset: 14004 },
+  { path: '/BackgroundImage/id', parserOffset: 14024 },
+  { path: '/LiveTileUpdateInterval', parserOffset: 14064 },
+  { path: '/DataSource/Type', parserOffset: 14112 },
+  { path: '/DataSource/Url', parserOffset: 14148 },
+  { path: '/CollectionId', parserOffset: 14180 },
+  { path: '/MaxItems', parserOffset: 14208 },
+  { path: '/MinItems', parserOffset: 14228 },
+  { path: '/StoreObjectsForLiveTile', parserOffset: 14248 },
+];
+
+/**
+ * The feed types a data source may name, in the order the binary holds them, each
+ * with the function that parses it. These are the tokens `Create StoreObjects with
+ * FeedType = %S` is handed: a type, a URL, and the parser that type selects.
+ *
+ * `Applications` is the one this lab serves, because a generated pane's content is
+ * an ordered list of applications and `/v9/catalog/apps` already answers with
+ * exactly that feed. `FeaturedApps`, `Collections` and `Categories` are the other
+ * three the client knows how to download; not served, not claimed.
+ */
+export const DATA_SOURCE_TYPES = [
+  { type: 'Applications', parser: 'Marketplace_ParseAppsFeedIntoStoreObjects', parserOffset: 139480, nameOffset: 139376 },
+  { type: 'FeaturedApps', parser: 'Marketplace_ParseFeedIntoStoreObjects', parserOffset: 139336, nameOffset: 139404 },
+  { type: 'Collections', parser: 'Marketplace_ParseCollectionsFeedIntoStoreObjects', parserOffset: 139524, nameOffset: 139432 },
+  { type: 'Categories', parser: 'Marketplace_ParseCategoriesFeedIntoStoreObjects', parserOffset: 139576, nameOffset: 139456 },
+];
+
+/**
+ * The three-letter codes the client tags objects with, in the order the binary
+ * holds them. Recorded because they are the other candidate vocabulary for a
+ * pane's `Type`: `app`, `fea`, `col` and `sto` look like page content, and the rest
+ * (`alb`, `tra`, `iap`, `adp`, `tptg`...) match the media, in-app-product and
+ * dependency-package families the neighbouring strings name.
+ *
+ * `inv` is one token the page parser's own pool holds - twice, between
+ * `/Templates/Template` and `/Templates` - so it is a token that function *compares or
+ * builds with*, not a neighbour. Armed as `paneType` on 2026-10-16 05:20 UTC, delivered
+ * once, and **negative** (E-006).
+ *
+ * `Collection` is the better reading of the same question, and it came from two
+ * places at once. In that pool, immediately before `TEMPLATETYPE` and the
+ * property-loading strings (`Prop: %d, %s, path {%S}, value {%S}`, `found`, `missing`),
+ * sit the tokens the client compares a *page* against: `sDynamicHub` (@29010),
+ * `DynamicChart` (@29036), `Collection` (@29064). And the phone's own UI assets
+ * (`ZuneAssets480x800.dll`) name the two kinds of item a hub draws:
+ * `Store_HubCollectionUI_ArtMargin`, `Store_HubCollectionUI_TitleMargin`,
+ * `Store_HubFeaturedItemUI_Margin` - with `Store_ChartCollectionUI_*` and
+ * `Store_ChartFeaturedItemUI_*` for a chart page, and the hub layouts
+ * `Store_Hub_TemplateType003List_Padding` (a list) and `Store_Hub_TemplateType017_*
+ * (one item with a price panel). A generated pane *is* one section of apps, so the
+ * word for it is `Collection`. Armed in `config.json` (`livestore.protocol.paneType`)
+ * on 2026-10-16 07:25 UTC; an empty value is what every page before E-006 carried.
+ */
+export const OBJECT_TYPE_CODES = [
+  { code: 'inv', parserOffset: 20112 },
+  { code: 'app', parserOffset: 20640 },
+  { code: 'fea', parserOffset: 21024 },
+  { code: 'col', parserOffset: 21456 },
+  { code: 'sto', parserOffset: 21696 },
+];
+
+/**
  * The grammar of the template block, as far as the phone can settle it.
  *
  * `container` and `element` are the path the parser walks, so `/Templates/Template`

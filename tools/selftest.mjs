@@ -32,14 +32,19 @@ import { ZincClient } from '../src/zinc.mjs';
 import { describeDirectHandshakeFailure } from '../src/proxy.mjs';
 import { StoreRouter } from '../src/store/router.mjs';
 import { buildHandlers } from '../src/store/handlers.mjs';
-import { buildStorePageFeed, buildApplicationListFeed, buildProductUpdatesResponse, uuidForApp, uuidForCollection, categoryId, normalizeVersion, findAppByUuid, isUuid, normalizePageFormat } from '../src/store/catalog-feed.mjs';
-import { pageSections } from '../src/store/protocol.mjs';
+import { buildStorePageFeed, buildApplicationListFeed, buildProductUpdatesResponse, uuidForApp, uuidForCollection, categoryId, normalizeVersion, findAppByUuid, isUuid, normalizePageFormat, ATOM_NS, CATALOG_NS } from '../src/store/catalog-feed.mjs';
+import { pageSections, applyPageMutation } from '../src/store/protocol.mjs';
 import {
   DEFAULT_TEMPLATE_TYPE, TEMPLATE_GRAMMAR, TEMPLATE_TYPES, PAGE_TYPES, PAGE_PARSE_PATHS,
   PATHS_NEAR_THE_PAGE_GRAMMAR,
   checkTemplateType, templateTypesForPageType, whyNotATemplate, PROVENANCE,
 } from '../src/store/vocabulary.mjs';
 import { query } from './dnsprobe.mjs';
+import * as sequence from './sequence.mjs';
+import {
+  normalisePath, looksLikeStoreHost, looksLikeWindowsPhoneClient, localAddresses,
+  deviceKeyOf, buildDeviceRows, buildClientRows, groupHttpClients, readDnsQueries,
+} from './analyze-captures.mjs';
 import { buildCertBlob, buildRegEntry, buildRegFileBuffer, buildPhoneCertBlob, phoneElementId, PHONE_ELEMENT_VERSION } from './make-rootreg.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -328,6 +333,30 @@ async function main() {
         catalogFile: path.join(ROOT, 'src', 'store', 'fixtures', 'sample-catalog.json'),
         hubTemplate: 'DynamicHub',
         pageSize: 25,
+        // Armed here as well as in config.json, so the suite checks the document
+        // the lab actually serves rather than the one it served before: a pane
+        // that names a data source, and the URL it names answering with that
+        // pane's own section.
+        dataSource: true,
+        dataSourceType: 'Applications',
+        // The pane's own type: armed, so the page under test is the page served.
+        // `Collection` is the word the client's page parser and its UI both use for
+        // one section of apps - see src/store/vocabulary.mjs. `paneSubType` stays
+        // empty, deliberately: no reading suggests a value, and two invented fields
+        // would be two variables.
+        paneType: 'Collection',
+        // The application list's entry shape, armed here as well as in config.json
+        // for the same reason: the suite has to check the XML the lab serves. Both
+        // values come from the archived responses of the real service - see
+        // src/store/fixtures/archive/real-apps-feed-*.xml and F-021/F-022 in
+        // docs/FINDINGS.md.
+        appListRank: 4,
+        appListEntryTitle: false,
+        // The configuration endpoint, armed here as in config.json: the check below
+        // tests the lab as it is configured, and the request it answers is the one
+        // the phone makes before it asks for a page (2026-10-16 06:20: eight of
+        // them in 735 ms, then no page at all).
+        configuration: { enabled: true },
       },
     },
     rules: [
@@ -377,6 +406,120 @@ async function main() {
     JSON.stringify(config.proxy.mitm.hosts));
   check('config: advertiseIp override respected', config.__hijackIp === FAKE_LAN_IP, config.__hijackIp);
 
+  // --- the capture census, before any device --------------------------------
+  // These are the readings that decide *whose* traffic a later finding is about,
+  // and getting them wrong is not an obvious failure: an aggregate that hands
+  // this PC's exchanges to the phone reads as a device behaving in a way it never
+  // behaved (F-012). Everything below is hermetic - fixed entries and a scratch
+  // capture root - so the rule is checked on every run rather than once by hand.
+  check('census: a path collapses ids, uuids and query keys',
+    normalisePath('/v9/app/12345/9f8e7d6c5b4a39281706/detail?z=1&a=2') === '/v9/app/{n}/{hex}/detail?a&z'
+      && normalisePath('/a/123e4567-e89b-12d3-a456-426614174000/b') === '/a/{uuid}/b'
+      && normalisePath('') === '',
+    normalisePath('/v9/app/12345/9f8e7d6c5b4a39281706/detail?z=1&a=2'));
+  check('census: this PC is recognised from its addresses, including a configured one',
+    localAddresses({ network: { advertiseIp: FAKE_LAN_IP }, dns: { hijack: { ip: 'auto' } } }).has(FAKE_LAN_IP)
+      && !localAddresses({}).has(FAKE_LAN_IP)
+      && localAddresses({}).has('127.0.0.1'),
+    `configured=${localAddresses({ network: { advertiseIp: FAKE_LAN_IP } }).has(FAKE_LAN_IP)}`);
+  check('census: the phone fingerprint is narrower than "looks like Store"',
+    looksLikeStoreHost('sqm.telemetry.microsoft.com')
+      && !looksLikeWindowsPhoneClient('sqm.telemetry.microsoft.com')
+      && looksLikeWindowsPhoneClient('discoveryservice.windowsphone.com')
+      && looksLikeWindowsPhoneClient('account.nokia.com')
+      && looksLikeWindowsPhoneClient('catalog.zune.net'),
+    `telemetry is store-ish only=${looksLikeStoreHost('sqm.telemetry.microsoft.com') && !looksLikeWindowsPhoneClient('sqm.telemetry.microsoft.com')}`);
+
+  // One phone, two addresses: the id is what decides, not the address. And two
+  // phones that share a model are still two, which is why the id and not the
+  // model is the key.
+  const phoneA = '40752FEDCD7E0095C8BFAFB9D58575C236517C15679D2C37046971F4FD5A1872';
+  const phoneB = '3499541B3396EB6C0BD654A634128C90CCBB2C06EC52F957266FE4DE12EEA32B';
+  const censusRequest = (address, requestPath, headers = {}) => ({
+    ts: '2026-01-01T00:00:00.000Z',
+    client: { address, port: 5000 },
+    decision: 'passthrough',
+    request: { method: 'GET', scheme: 'https', host: 'cdn.marketplaceedgeservice.windowsphone.com', port: 443, path: requestPath, headers },
+    response: { status: 200, headers: {}, body: null },
+  });
+  const storePath = '&os=8.10.14219.0&hw=402699266&dm=RM-941_eu_france_308&oemId=NOKIA';
+  const hungaryPath = '&os=8.10.14226.0&hw=402699266&dm=RM-941_eu_hungary_356&oemId=NOKIA';
+
+  const censusExchanges = [
+    censusRequest('192.168.0.136', `/x?typeId=DynamicHub.Main${storePath}`, { 'x-wp-device-id': phoneA }),
+    censusRequest('192.168.0.137', `/x?typeId=DynamicHub.Main${storePath}`, { 'x-wp-device-id': phoneA }),
+    // A system component of the same handset: no device id, same hw/dm.
+    censusRequest('192.168.0.137', '/v8/Configuration/Stores/OEMStores/NOKIA?mpcVersion=8.10&os=8.10.14219.0&hw=402699266&dm=RM-941_eu_france_308'),
+    censusRequest('192.168.0.53', `/x?typeId=DynamicHub.Main${hungaryPath}`, { 'x-wp-device-id': phoneB }),
+    // This PC replaying the device's own request: same path, same agent, and
+    // even a copied device id - and it must not become a device.
+    censusRequest(FAKE_LAN_IP, `/x?typeId=DynamicHub.Main${storePath}`, { 'x-wp-device-id': phoneA, 'user-agent': 'ZDM/4.0; Windows Mobile 8.1' }),
+  ];
+  const deviceCensus = buildDeviceRows(censusExchanges.filter((entry) => entry.client.address !== FAKE_LAN_IP));
+  const censusRows = buildClientRows({
+    http: groupHttpClients(censusExchanges),
+    dns: new Map([
+      ['192.168.0.136', { address: '192.168.0.136', count: 296, first: '2026-01-01T00:00:00.000Z', last: '2026-01-01T01:00:00.000Z', names: new Map([['discoveryservice.windowsphone.com', 41], ['sqm.telemetry.microsoft.com', 11]]), actions: new Map([['forward', 52]]), hijacked: 0 }],
+      [FAKE_LAN_IP, { address: FAKE_LAN_IP, count: 8639, first: '2026-01-01T00:00:00.000Z', last: '2026-01-01T01:00:00.000Z', names: new Map([['wscont1.apps.microsoft.com', 56]]), actions: new Map([['hijack', 56]]), hijacked: 56 }],
+    ]),
+    localIps: new Set([FAKE_LAN_IP]),
+  });
+
+  check('census: one device id at two addresses is one device',
+    deviceCensus.length === 3
+      && deviceCensus[0].ids.has(phoneA)
+      && [...deviceCensus[0].addresses.keys()].sort().join(',') === '192.168.0.136,192.168.0.137'
+      && deviceCensus[0].count === 2,
+    deviceCensus.map((d) => `${[...d.ids].join('') || '(none)'}:${d.count}@${[...d.addresses.keys()].join('+')}`).join(' '));
+  const idDevices = deviceCensus.filter((d) => d.ids.size === 1);
+  check('census: two handsets of the same model stay two devices',
+    idDevices.length === 2
+      && idDevices.every((d) => [...d.hardwareKeys].every((key) => key.startsWith('hw=402699266 ')))
+      && Boolean(idDevices.find((d) => d.ids.has(phoneA)))
+      && Boolean(idDevices.find((d) => d.ids.has(phoneB)))
+      && ![...idDevices.find((d) => d.ids.has(phoneA)).hardwareKeys].some((key) => key.includes('hungary'))
+      && ![...idDevices.find((d) => d.ids.has(phoneB)).hardwareKeys].some((key) => key.includes('france')),
+    idDevices.map((d) => `${[...d.ids][0].slice(0, 8)}=${[...d.hardwareKeys].join(' ')}`).join(' | '));
+  check('census: a component with no id but the same hw/dm joins its handset',
+    deviceCensus.some((d) => !d.ids.size && d.count === 1 && d.sameAs?.length === 1
+      && [...d.requests.keys()].some((r) => r.includes('/v8/Configuration/Stores/OEMStores/'))),
+    JSON.stringify(deviceCensus.map((d) => ({ ids: [...d.ids].length, count: d.count, sameAs: d.sameAs || [] }))));
+  const pcRow = censusRows.find((row) => row.address === FAKE_LAN_IP);
+  const phoneRow = censusRows.find((row) => row.address === '192.168.0.136');
+  check('census: this PC is marked, and its copy of a device request is not a device',
+    censusRows.length === 4
+      && pcRow.thisPc && pcRow.kind === 'this PC' && pcRow.exchanges === 1
+      && phoneRow.phoneIsh && !phoneRow.thisPc
+      && censusRows.filter((row) => !row.thisPc).length === 3
+      && censusRows.at(-1).address === FAKE_LAN_IP,
+    censusRows.map((row) => `${row.address}=${row.kind}`).join(' '));
+  check('census: the device-side fingerprints are reported per address, never pooled',
+    censusRows[0].fingerprint.join(',') === 'discoveryservice.windowsphone.com'
+      && censusRows.at(-1).fingerprint.length === 0
+      && censusRows.at(-1).storeNames.join(',') === 'wscont1.apps.microsoft.com',
+    `device=${censusRows[0].fingerprint.join(',')} pc=${censusRows.at(-1).fingerprint.join(',') || '(none)'}`);
+
+  // Both readers of the DNS log stream it, and the file that broke
+  // `readFileSync` is exactly this one (footgun 10). A torn last line and a blank
+  // line are the two shapes a live log is read in, so both are checked here.
+  const censusRoot = path.join(WORK, 'census');
+  await fsp.mkdir(censusRoot, { recursive: true });
+  await fsp.writeFile(path.join(censusRoot, 'dns-queries-2026-01-01.jsonl'), [
+    '{"ts":"2026-01-01T00:00:00.000Z","client":"192.168.0.136","qname":"discoveryservice.windowsphone.com","qtype":"A","action":"forward"}',
+    '',
+    '{"ts":"2026-01-01T00:00:01.000Z","client":"192.168.0.136","qname":"catalog.zune.net","qtype":"A","action":"hijack","answer":"192.0.2.10"}',
+    '{"ts":"2026-01-01T00:00:02.000Z","client":"192.168.0.1","qname":"www.msftncsi.com","qtype":"A","action":"cache"}',
+    '{"ts":"2026-01-01T00:00:03.000Z","client":"192.168.0.2","qname":"tor',
+  ].join('\n'));
+  const dnsCensus = await readDnsQueries(censusRoot);
+  check('census: the DNS log is read per client, and a torn line is dropped',
+    dnsCensus.byClient.size === 2
+      && dnsCensus.byClient.get('192.168.0.136').count === 2
+      && dnsCensus.byClient.get('192.168.0.136').names.size === 2
+      && dnsCensus.byClient.get('192.168.0.136').hijacked === 1
+      && dnsCensus.byName.size === 3,
+    `clients=${dnsCensus.byClient.size} names=${dnsCensus.byName.size} torn=${dnsCensus.byName.has('tor') ? 'counted' : 'dropped'}`);
+
   // --- the Store protocol's own format, before any device -----------------
   // The grammar is the one archived responses of the real service show (each
   // element in src/store/catalog-feed.mjs names the capture it came from). What
@@ -405,6 +548,47 @@ async function main() {
     homeXml.includes('xmlns="http://schemas.zune.net/catalog/apps/2008/02"')
       && homeXml.includes('<templateName>DynamicHub</templateName>'),
     homeXml.slice(0, 80));
+
+  // What a pane says it *is*. Written only when a type is configured: every page
+  // this lab served before carried none, those are the pages whose readings are on
+  // record, and an experiment that cannot be un-armed cannot be read.
+  const typedPanes = buildStorePageFeed({
+    sections,
+    selfHref: '/v9/catalog/storePages?typeId=DynamicHub.Main&cc=IT',
+    templateName: 'DynamicHub',
+    templateType: DEFAULT_TEMPLATE_TYPE,
+    pageFormat: 'panes',
+    paneType: 'Collection',
+    paneSubType: 'FeaturedApps',
+  });
+  check('store protocol: a pane writes the type it is given, and writes none when given none',
+    homeXml.split('<Type>').length - 1 === 0
+      && homeXml.split('<SubType>').length - 1 === 0
+      && typedPanes.split('<Type>Collection</Type>').length - 1 === sections.length
+      && typedPanes.split('<SubType>FeaturedApps</SubType>').length - 1 === sections.length
+      && xmlProblem(typedPanes) === null,
+    `${sections.length} pane(s): untyped by default, all typed when configured`);
+
+  // The application list's entry shape, against the archived responses of the real
+  // service. Both archived generations of `/v8/catalog/apps` and `/v9/catalog/apps`
+  // put `<k>` on every entry, immediately after `impressionId`; neither puts a bare
+  // `<title>` at entry level. The default stays this lab's own earlier feed, so the
+  // archived shape is a value somebody set and can put back.
+  const entryTitleCount = (xml) => xml.split('<isHardwareCompatible>true</isHardwareCompatible><title>').length - 1;
+  const archivedEntryShape = buildApplicationListFeed({
+    apps: fixtureApps, selfHref: '/v9/catalog/apps', id: 'x', entryRank: 4, entryTitle: false,
+  });
+  const labEntryShape = buildApplicationListFeed({ apps: fixtureApps, selfHref: '/v9/catalog/apps', id: 'x' });
+  check('app list: the configured entry shape is the archived one, and the default is this lab\'s own',
+    archivedEntryShape.split('<k>').length - 1 === fixtureApps.length
+      && archivedEntryShape.includes('<k>4</k>')
+      && archivedEntryShape.includes(`<k>${3 + fixtureApps.length}</k>`)
+      && archivedEntryShape.split('</impressionId><k>').length - 1 === fixtureApps.length
+      && entryTitleCount(archivedEntryShape) === 0
+      && labEntryShape.split('<k>').length - 1 === 0
+      && entryTitleCount(labEntryShape) === fixtureApps.length
+      && xmlProblem(archivedEntryShape) === null,
+    `k=${archivedEntryShape.split('<k>').length - 1} (${archivedEntryShape.match(/<k>\d+<\/k>/g)?.join(' ')}), archived titles=${entryTitleCount(archivedEntryShape)}, lab titles=${entryTitleCount(labEntryShape)}`);
 
   // The update check. It answered 502 on every attempt before this, and the
   // capture shows the phone retrying it four times in a row while the Store was
@@ -517,11 +701,23 @@ async function main() {
   // phone asserted on every one of them. `/StorePage` is the one element name in
   // the parser's store-page grammar that a served page never carried, so the root
   // is held here, and the older shape is held to still being what it was.
+  // The root tag may carry attributes, and now does: what the element name has to
+  // be is `StorePage`, which is what the assertion is about, so the attributes are
+  // allowed rather than the name loosened.
   check('vocabulary: the page root is the element the parser looks for',
-    /<\?xml[^?]*\?><StorePage>/.test(homeXml) && homeXml.trimEnd().endsWith('</StorePage>'),
+    /<\?xml[^?]*\?><StorePage(\s[^>]*)?>/.test(homeXml) && homeXml.trimEnd().endsWith('</StorePage>'),
     homeXml.slice(0, 60));
+  // The declarations belong on the document element. Declaring them only on the
+  // nested <a:feed> left `StorePage`, `Panes` and `Template` in no namespace at
+  // all, which is a document no Microsoft service emits - the archived response
+  // declares them on its own root, and the parser names the catalog namespace
+  // (@118040) and the literal `xmlns` in the download path (@27812).
+  const rootTag = (homeXml.match(/<StorePage\b[^>]*>/) || [''])[0];
+  check('vocabulary: the page root declares the catalog and atom namespaces',
+    rootTag.includes(`xmlns="${CATALOG_NS}"`) && rootTag.includes(`xmlns:a="${ATOM_NS}"`),
+    rootTag || 'no root tag found');
   check('vocabulary: the panes and the template block are children of that root, not of the feed',
-    /<StorePage><Panes>[\s\S]*?<\/Panes><Templates>[\s\S]*?<\/Templates>/.test(homeXml),
+    /<StorePage(\s[^>]*)?><Panes>[\s\S]*?<\/Panes><Templates>[\s\S]*?<\/Templates>/.test(homeXml),
     'checked on the rendered page');
   const atomPage = buildStorePageFeed({
     sections, templateName: 'DynamicHub', templateType: '003', pageFormat: 'atom',
@@ -701,7 +897,7 @@ async function main() {
       : `${PAGE_PARSE_PATHS.filter((e) => e.required !== false).length} path(s) carried`);
   check('pageFormat panes: the document is still a well-formed store page',
     xmlProblem(panesXmlDoc) === null
-      && /^<\?xml[^?]*\?><StorePage>/.test(panesXmlDoc)
+      && /^<\?xml[^?]*\?><StorePage(\s[^>]*)?>/.test(panesXmlDoc)
       && panesXmlDoc.trimEnd().endsWith('</StorePage>')
       && /<Panes>[\s\S]*?<\/Panes><Templates>[\s\S]*?<\/Templates>/.test(panesXmlDoc),
     xmlProblem(panesXmlDoc) || `${panesXmlDoc.length} bytes`);
@@ -736,11 +932,19 @@ async function main() {
         return `${app.name}: ${namings(panesHalf, guid)} in the panes, ${namings(feedHalf, guid)} in the feed, ${panesOf(guid)} pane(s)`;
       }).join(', ')
       : `${demoApps.length} apps, twice in each view, each in one pane`);
+  // A pane names its collection three ways - as its own id, as the collection it
+  // lists, and as its link target - and the entry underneath names it as its id and
+  // as its link target. All five are the same GUID: counting them is what keeps the
+  // two views from drifting, because a pane pointing at a collection other than the
+  // one it is, or an entry belonging to another section, changes these numbers.
   check('pageFormat panes: a pane and its entry name the same collection',
     demoSections.every((section) => {
       const collection = uuidForCollection(section.title);
-      return panesHalf.split(collection).length - 1 === 1
-        && feedHalf.split(collection).length - 1 === 2;
+      const times = (text2, needle) => text2.split(needle).length - 1;
+      return times(panesHalf, collection) === 3
+        && times(panesHalf, `<target>${collection}</target>`) === 1
+        && times(feedHalf, collection) === 2
+        && times(feedHalf, `<target>${collection}</target>`) === 1;
     }),
     'the pane\'s target is the entry\'s id, so the two views of a section cannot drift');
   check('pageFormat: an unknown value reads as the store page, not as a document nobody asked for',
@@ -773,6 +977,168 @@ async function main() {
     (await probeRouter.handle(probeCtx, { config, logger, zinc: null }))?.status === 200,
     're-enabled without rebuilding the router');
 
+  // The Live Store client's JSON API (F-029). The two field lists below are not
+  // this lab's invention: they are the keys the client's own cache holds, and a
+  // renamed or added key here would be a claim about a protocol nobody measured.
+  const OBSERVED_ENTRY_FIELDS = ['id', 'name', 'description', 'developer', 'publisher', 'category', 'icon',
+    'screenshots', 'r2_url', 'version', 'release_date', 'featured', 'status', 'architecture', 'architectures',
+    'wp_platform_type', 'wp_platform_version'];
+  const OBSERVED_DOCUMENT_FIELDS = ['details', 'available', 'availabilityNotice', 'updates', 'reviews',
+    'averageRating', 'totalReviews', 'screenshots', 'variants', 'selectedVariantId', 'downloadCount', 'information'];
+  const liveCtx = (pathname, method = 'GET') => ({
+    ...probeCtx, host: 'store-api.live.net.co', method, path: pathname, headers: {},
+  });
+
+  const mitmBefore = [...config.proxy.mitm.hosts];
+  config.livestore.client = { ...(config.livestore.client || {}), enabled: false };
+  const liveOff = await probeRouter.handle(liveCtx('/apps'), { config, logger, zinc: null });
+  config.livestore.client = {
+    ...(config.livestore.client || {}),
+    enabled: true,
+    catalogFile: path.join(ROOT, 'src', 'store', 'fixtures', 'demo-catalog.json'),
+  };
+  // Enabled, but the host is not one the lab was told to intercept: the guard has
+  // to refuse rather than answer, because the router sees every request that
+  // reaches the lab and a bare Host header is not an instruction.
+  const liveNotListed = await probeRouter.handle(liveCtx('/apps'), { config, logger, zinc: null });
+  config.proxy.mitm.hosts.push('store-api.live.net.co');
+  const liveApps = await probeRouter.handle(liveCtx('/apps'), { config, logger, zinc: null });
+  const liveBody = JSON.parse(String(liveApps?.body || '{}'));
+  check('live client: a host the lab was not told to intercept is refused, not answered',
+    liveNotListed?.status === 421 && liveNotListed.headers['x-lab-source'] === 'live-client',
+    `/apps on an unlisted host -> ${liveNotListed?.status}`);
+  check('live client: off it falls through, on it answers the list envelope',
+    liveOff === null && liveApps?.status === 200
+      && Array.isArray(liveBody.categories) && Array.isArray(liveBody.apps)
+      && liveApps.headers['x-lab-invented'] === '1',
+    `off=${liveOff === null ? 'passthrough' : 'answered'} on=${liveApps?.status} apps=${liveBody.apps?.length}`);
+  check('live client: an entry carries exactly the fields the client\'s cache carried',
+    JSON.stringify(Object.keys(liveBody.apps?.[0] || {}).sort()) === JSON.stringify([...OBSERVED_ENTRY_FIELDS].sort()),
+    Object.keys(liveBody.apps?.[0] || {}).join(','));
+  check('live client: the ids are the numeric strings the client asks back for',
+    liveBody.apps?.every((entry, index) => entry.id === String(index + 1))
+      && typeof liveBody.apps?.[0]?.id === 'string',
+    `first=${liveBody.apps?.[0]?.id} last=${liveBody.apps?.[liveBody.apps.length - 1]?.id}`);
+
+  const liveDetail = await probeRouter.handle(liveCtx('/app/1'), { config, logger, zinc: null });
+  const liveDetailBody = JSON.parse(String(liveDetail?.body || '{}'));
+  check('live client: a detail document carries exactly the thirteen observed keys',
+    liveDetail?.status === 200
+      && JSON.stringify(Object.keys(liveDetailBody).sort()) === JSON.stringify([...OBSERVED_DOCUMENT_FIELDS].sort())
+      && liveDetailBody.details?.id === '1'
+      && typeof liveDetailBody.details?.download_count === 'string',
+    Object.keys(liveDetailBody).join(','));
+  check('live client: an id that is not in the catalog is a 404, not a document',
+    (await probeRouter.handle(liveCtx('/app/9999'), { config, logger, zinc: null }))?.status === 404,
+    'unknown id');
+
+  const liveSearch = await probeRouter.handle(liveCtx('/apps/search?q='), { config, logger, zinc: null });
+  const firstName = String(liveBody.apps?.[0]?.name || '').split(' ')[0];
+  // The comparison is case-insensitive because the filter is: the first check of
+  // this ran with `Corte` against text holding `scorte` and failed on the harness
+  // rather than on the handler, which is the kind of failure a check should not be
+  // able to report. The haystack is the same four fields the handler searches.
+  const found = await probeRouter.handle(
+    liveCtx(`/apps/search?q=${encodeURIComponent(firstName)}`), { config, logger, zinc: null },
+  );
+  const foundBody = JSON.parse(String(found?.body || '{}'));
+  const nothing = await probeRouter.handle(
+    liveCtx('/apps/search?q=zzzznosuchapp'), { config, logger, zinc: null },
+  );
+  const nothingBody = JSON.parse(String(nothing?.body || '{}'));
+  check('live client: search needs a term, with one it filters, with none it finds nothing',
+    liveSearch?.status === 400
+      && found?.status === 200 && foundBody.apps?.length >= 1 && foundBody.apps.length < liveBody.apps.length
+      && foundBody.apps.every((entry) => `${entry.name} ${entry.description} ${entry.category} ${entry.developer}`
+        .toLowerCase().includes(firstName.toLowerCase()))
+      && nothingBody.apps?.length === 0,
+    `q='' -> ${liveSearch?.status}, q=${firstName} -> ${foundBody.apps?.length}/${liveBody.apps.length}, q=zzzz -> ${nothingBody.apps?.length}`);
+
+  const liveGames = await probeRouter.handle(liveCtx('/games'), { config, logger, zinc: null });
+  const liveGamesBody = JSON.parse(String(liveGames?.body || '{}'));
+  check('live client: games is answered as an empty list and says why',
+    liveGames?.status === 200 && Array.isArray(liveGamesBody.games) && liveGamesBody.games.length === 0
+      && liveGames.headers['x-lab-note'] === 'the catalog this lab serves carries no games',
+    `${liveGamesBody.games?.length} games, note=${liveGames.headers['x-lab-note'] ? 'yes' : 'no'}`);
+  check('live client: the account record is refused rather than invented',
+    (await probeRouter.handle(liveCtx('/me'), { config, logger, zinc: null }))?.status === 401,
+    '/me -> 401');
+  check('live client: a method the API does not define is a 405, not a passthrough',
+    (await probeRouter.handle(liveCtx('/apps', 'POST'), { config, logger, zinc: null }))?.status === 405,
+    'POST /apps -> 405');
+  // The image CDN (F-031). The check that matters is the bytes: the handler exists
+  // to replace an injected 502 with a picture, so a body that is not a decodable PNG
+  // would be the same failure wearing a 200.
+  config.livestore.images = { ...(config.livestore.images || {}), enabled: false };
+  const imageOff = await probeRouter.handle(
+    { ...probeCtx, host: 'cdn.marketplaceimages.windowsphone.com', path: '/v8/images/0b8d13d3-d5f8-51ed-8e05-94abb0e42539?imagetype=icon_small' },
+    { config, logger, zinc: null },
+  );
+  config.livestore.images = { ...(config.livestore.images || {}), enabled: true };
+  const imageUnlisted = await probeRouter.handle(
+    { ...probeCtx, host: 'cdn.marketplaceimages.windowsphone.com', path: '/v8/images/0b8d13d3-d5f8-51ed-8e05-94abb0e42539?imagetype=icon_small' },
+    { config, logger, zinc: null },
+  );
+  config.proxy.mitm.hosts.push('cdn.marketplaceimages.windowsphone.com');
+  const imageOn = await probeRouter.handle(
+    { ...probeCtx, host: 'cdn.marketplaceimages.windowsphone.com', path: '/v8/images/0b8d13d3-d5f8-51ed-8e05-94abb0e42539?imagetype=icon_small' },
+    { config, logger, zinc: null },
+  );
+  const png = imageOn?.body || Buffer.alloc(0);
+  const pngOk = png.length > 60
+    && png.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    && png.subarray(12, 16).toString('latin1') === 'IHDR'
+    && png.subarray(png.length - 8, png.length - 4).toString('latin1') === 'IEND'
+    && imageOn.headers['content-length'] === String(png.length);
+  check('images: off the request falls through, on it is a PNG, and an unlisted host is refused',
+    imageOff === null && imageUnlisted?.status === 421 && imageOn?.status === 200 && pngOk
+      && imageOn.headers['content-type'] === 'image/png' && imageOn.headers['x-lab-invented'] === '1',
+    `off=${imageOff === null ? 'passthrough' : 'answered'} unlisted=${imageUnlisted?.status} on=${imageOn?.status} ${png.length}B png=${pngOk}`);
+  check('images: the same bytes for every guid and every imagetype',
+    (await probeRouter.handle(
+      { ...probeCtx, host: 'cdn.marketplaceimages.windowsphone.com', path: '/v8/images/another-guid?imagetype=background' },
+      { config, logger, zinc: null },
+    ))?.body.equals(png),
+    'one placeholder, not a per-guid invention');
+  config.livestore.images.enabled = false;
+
+  config.livestore.client.enabled = false;
+  config.proxy.mitm.hosts = mitmBefore;
+
+  // Every pane's source URL, read back out of the page the *demo* catalog produces
+  // and fetched through the router exactly as the client fetches what a pane points
+  // at. The demo catalog is the one `config.json` runs, so a section whose URL
+  // answered with another section's apps - or with nothing - would be a screen with
+  // a wrong list or an empty one, and every other check in this file would still
+  // pass. The router is driven directly here rather than through the proxy, because
+  // the exchanges are already counted further down and these are eight more.
+  const demoCatalogFile = config.livestore.protocol.catalogFile;
+  config.livestore.protocol.catalogFile = path.join(ROOT, 'src', 'store', 'fixtures', 'demo-catalog.json');
+  const demoPage = await probeRouter.handle(
+    { ...probeCtx, path: '/v9/catalog/storePages?typeId=DynamicHub.Main&cc=IT&lang=it-IT' },
+    { config, logger, zinc: null },
+  );
+  const paneUrls = [...String(demoPage?.body || '')
+    .matchAll(/<DataSource><Type>Applications<\/Type><Url>([^<]+)<\/Url><\/DataSource>/g)]
+    .map((m) => new URL(m[1].replace(/&amp;/g, '&')));
+  const filled = [];
+  for (const url of paneUrls) {
+    const response = await probeRouter.handle(
+      { ...probeCtx, host: url.host, path: `${url.pathname}${url.search}` },
+      { config, logger, zinc: null },
+    );
+    const body = String(response?.body || '');
+    const section = demoSections.find((s) => s.title === url.searchParams.get('category'));
+    filled.push(Boolean(section)
+      && response?.headers['x-lab-apps'] === String(section.items.length)
+      && response?.headers['x-lab-category'] === section.title.toLowerCase()
+      && section.items.every((app) => body.includes(`urn:uuid:${uuidForApp(app.id)}`)));
+  }
+  config.livestore.protocol.catalogFile = demoCatalogFile;
+  check('store protocol: every pane the demo page names answers with that section',
+    paneUrls.length === demoSections.length && filled.length > 0 && filled.every(Boolean),
+    `${filled.filter(Boolean).length}/${paneUrls.length} source(s) answered for ${demoSections.length} section(s)`);
+
   // The update check, routed the way the proxy routes it.
   //
   // This check exists because its absence cost a deployment rehearsal: the first
@@ -804,6 +1170,139 @@ async function main() {
   check('store protocol: the update check refuses a method it does not define',
     updatesAsGet?.status === 405,
     `status=${updatesAsGet?.status} hint=${updatesAsGet?.headers ? '' : ''}${JSON.parse(updatesAsGet?.body?.toString('utf8') || '{}').hint || ''}`);
+
+  // The configuration endpoint, added 2026-10-17. The two requests it answers are
+  // the ones the phone makes *before* it asks for a page, and until now the lab had
+  // no route for them: the host is hijacked, so the relay resolved the name back to
+  // this process and answered 502 upstream_loop. These checks exist because that
+  // failure was invisible from the PC side - the lab looked healthy while the one
+  // request on the client's critical path was being dropped.
+  // The host stays `127.0.0.1` like the rest of these probes: it is the one address
+  // this test config intercepts (`proxy.mitm.hosts`), and the routing decision does
+  // not depend on which intercepted host the request arrived through.
+  const configCtx = {
+    ...probeCtx,
+    scheme: 'http',
+    port: 80,
+    path: '/v8/Configuration/Stores/OEMStores/NOKIA?mpcVersion=8.10&os=8.10.14219.0&cc=IT&lang=it-IT',
+  };
+  const oemConfig = await probeRouter.handle(configCtx, { config, logger, zinc: null });
+  const moConfig = await probeRouter.handle(
+    { ...configCtx, path: '/v8/Configuration/Stores/MOStores/?mpcVersion=8.10&os=8.10.14219.0&cc=IT&lang=it-IT' },
+    { config, logger, zinc: null },
+  );
+  const oemText = String(oemConfig?.body || '');
+  const moText = String(moConfig?.body || '');
+  check('store protocol: the configuration endpoint is routed, not fallen through',
+    oemConfig?.status === 200
+      && oemConfig.decision === 'store:store-protocol'
+      && oemConfig.headers['x-lab-protocol'] === 'configuration'
+      && xmlProblem(oemText) === null,
+    `status=${oemConfig?.status} decision=${oemConfig?.decision} bytes=${oemConfig?.body?.length}`);
+  // The document's frame is no longer this lab's invention: it is the
+  // `ConfigurationFile` / `Domains` / `Domain id="PROD"` / `<setting id=...>`
+  // grammar the client's own shipped file uses, and the settings are the
+  // `WPAppsMarketplace*` names that file and the DLL's pool spell. The check
+  // asserts the grammar as well as the two store identities, because a body that
+  // drifts back to an invented root would otherwise still look like an answer.
+  check('store protocol: the configuration answer uses the client\'s ConfigurationFile grammar',
+    /^<\?xml[^>]*\?><ConfigurationFile version="81000" forceupdate="0"><Domains><Domain id="PROD">/.test(oemText)
+      && oemText.trimEnd().endsWith('</Domain></Domains></ConfigurationFile>')
+      && !/<StoreConfiguration/.test(oemText),
+    `bytes=${oemConfig?.body?.length} tail=${oemText.slice(-46)}`);
+  check('store protocol: each configuration store answers as itself',
+    oemText.includes('<setting id="OEMStoreID">NOKIA</setting>')
+      && !moText.includes('OEMStoreID')
+      && !/MOStoreID/.test(oemText),
+    `oem=${oemConfig?.headers?.['x-lab-configuration-store']} mo=${moConfig?.headers?.['x-lab-configuration-store']}`);
+  // A CDN base written as `cdn.<address>` is a name no resolver can answer, and the
+  // client would be handed a URL it can never fetch - the classic way this reply
+  // looks right and disables images.
+  check('store protocol: the configuration answer sends the client back to this lab',
+    /<setting id="WPAppsMarketplaceShopSecure" nexus="WPAppsMarketplaceShopSecure">https:\/\/127\.0\.0\.1\/<\/setting>/.test(oemText)
+      && /<setting id="WPAppsMarketplaceShopCdn"[^>]*>http:\/\/cdn\.marketplaceedgeservice\.windowsphone\.com\//.test(oemText)
+      && /<setting id="WPAppsMarketplaceImageService"[^>]*>http:\/\/cdn\.marketplaceimages\.windowsphone\.com\//.test(oemText)
+      && !/cdn\.127\.0\.0\.1/.test(oemText),
+    oemText.split('<setting').find((line) => line.startsWith(' id="WPAppsMarketplaceShopSecure"')) || 'missing');
+  // The values are still this lab's answers for a service that no longer exists,
+  // and the capture has to say so: no archived or on-device capture of this
+  // endpoint exists, so a reader who took the body for ground truth would be
+  // reading a claim nobody made. What the header must *not* claim any more is that
+  // the element names are invented - that stopped being true.
+  check('store protocol: the configuration answer declares its values inferred',
+    oemConfig?.headers['x-lab-invented'] === '1'
+      && /frame from the device/.test(String(oemConfig?.headers['x-lab-configuration-evidence'])),
+    `invented=${oemConfig?.headers['x-lab-invented']} evidence=${oemConfig?.headers['x-lab-configuration-evidence']}`);
+
+  config.livestore.protocol.configuration = { enabled: false };
+  const configOff = await probeRouter.handle(configCtx, { config, logger, zinc: null });
+  config.livestore.protocol.configuration = { enabled: true };
+  check('store protocol: the configuration endpoint is off unless it is armed',
+    configOff === null,
+    `off=${configOff === null ? 'falls through to passthrough' : `answered ${configOff?.status}`}`);
+
+  // The negative control. This is the one variable no page experiment has moved:
+  // six documents, all plausible, none broken. The check asserts the served body
+  // is genuinely unparseable *and* that the response is labelled, because a
+  // control that quietly became a normal delivery would turn the device's usual
+  // silence into a result.
+  config.livestore.protocol.serve = 'control-broken';
+  const controlled = await probeRouter.handle(probeCtx, { config, logger, zinc: null });
+  const controlledText = String(controlled?.body || '');
+  check('store protocol: control mode serves a body no parser can accept',
+    controlled?.status === 200
+      && controlled.headers['x-lab-control'] === 'malformed'
+      && controlled.headers['x-lab-protocol'] === 'storePages:control'
+      && xmlProblem(controlledText) !== null
+      && !controlledText.trimEnd().endsWith('>')
+      && controlled.headers['content-length'] === String(Buffer.byteLength(controlledText)),
+    `status=${controlled?.status} label=${controlled?.headers['x-lab-control']} bytes=${controlled?.body?.length}`);
+
+  config.livestore.protocol.controlFile = config.livestore.protocol.archiveFile;
+  const repairedControl = await probeRouter.handle(probeCtx, { config, logger, zinc: null });
+  config.livestore.protocol.controlFile = 'src/store/fixtures/control/broken-page.xml';
+  config.livestore.protocol.serve = 'generated';
+  check('store protocol: a repaired control file is refused instead of served',
+    repairedControl?.status === 502
+      && JSON.parse(String(repairedControl?.body || '{}')).error === 'control_unavailable',
+    `status=${repairedControl?.status}`);
+
+  // The mutation probe. E-008 showed the client answers differently to documents
+  // it can and cannot accept, so the page it *does* accept can be turned into a
+  // question: rename one element and see whether the verdict moves. What is
+  // asserted here is that the delivered body is the accepted page with exactly one
+  // name changed - not that the device reacts, which no PC-side check can say.
+  const baselinePage = await probeRouter.handle(probeCtx, { config, logger, zinc: null });
+  const baselineText = String(baselinePage?.body || '');
+  config.livestore.protocol.serve = 'mutant';
+  config.livestore.protocol.mutant = 'panes-renamed';
+  const mutatedPage = await probeRouter.handle(probeCtx, { config, logger, zinc: null });
+  const mutatedText = String(mutatedPage?.body || '');
+  const expectedMutant = baselineText.split('<Panes>').join('<PanesX>').split('</Panes>').join('</PanesX>');
+  config.livestore.protocol.mutant = 'no-such-mutation';
+  const unknownMutant = await probeRouter.handle(probeCtx, { config, logger, zinc: null });
+  config.livestore.protocol.serve = 'generated';
+  config.livestore.protocol.mutant = '';
+  check('store protocol: mutant mode serves the accepted page with exactly one construct renamed',
+    mutatedPage?.status === 200
+      && mutatedPage.headers['x-lab-protocol'] === 'storePages:mutant'
+      && mutatedPage.headers['x-lab-mutant'] === 'panes-renamed'
+      && mutatedText === expectedMutant
+      && mutatedText !== baselineText
+      && mutatedText.includes('<PanesX>')
+      && !mutatedText.includes('<Panes>')
+      && xmlProblem(mutatedText) === null
+      && mutatedPage.headers['content-length'] === String(Buffer.byteLength(mutatedText)),
+    `status=${mutatedPage?.status} label=${mutatedPage?.headers['x-lab-mutant']} bytes=${mutatedPage?.body?.length} baseline=${baselineText.length}`);
+  check('store protocol: an unknown mutant is refused, never served as an ordinary page',
+    unknownMutant?.status === 502
+      && JSON.parse(String(unknownMutant?.body || '{}')).error === 'unknown_mutant',
+    `status=${unknownMutant?.status}`);
+  check('store protocol: a mutation whose element is absent is refused',
+    applyPageMutation('datasource-renamed', '<StorePage></StorePage>')?.error === 'mutant_unavailable'
+      && applyPageMutation('panes-renamed', '<StorePage><Panes></Panes></StorePage>')?.xml
+        === '<StorePage><PanesX></PanesX></StorePage>',
+    `absent=${applyPageMutation('datasource-renamed', '<StorePage></StorePage>')?.error}`);
 
   // The counter-proof, checked for what it is: with serve='archive' the page
   // endpoint answers with a response of the real service byte for byte, and every
@@ -843,6 +1342,17 @@ async function main() {
       && !otherEndpoint.body.toString('utf8').includes('GamesHub')
       && fixtureApps.every((app) => otherEndpoint.body.toString('utf8').includes(`urn:uuid:${uuidForApp(app.id)}`)),
     `label=${otherEndpoint?.headers['x-lab-protocol']}`);
+
+  // The same shape read through the router, not from the builder: the header is
+  // where a value that reached the builder and never reached the wire was caught
+  // once before, and this is the only place the two can disagree.
+  const servedList = otherEndpoint.body.toString('utf8');
+  check('store protocol: the served application list carries the archived entry shape, and says so',
+    otherEndpoint.headers['x-lab-applist-rank'] === String(config.livestore.protocol.appListRank)
+      && otherEndpoint.headers['x-lab-applist-entry-title'] === 'no'
+      && servedList.split('</impressionId><k>').length - 1 === fixtureApps.length
+      && servedList.includes('<k>4</k>'),
+    `rank=${otherEndpoint.headers['x-lab-applist-rank']} entryTitle=${otherEndpoint.headers['x-lab-applist-entry-title']} k=${servedList.split('<k>').length - 1}`);
 
   // --- fake backend -------------------------------------------------------
   const pki = await new Pki({
@@ -1068,6 +1578,12 @@ async function main() {
     // there to answer it.
     const storeQuery = '/v9/catalog/storePages?typeId=DynamicHub.Main&os=8.10.14219.0&cc=IT&lang=it-IT'
       + '&hw=402699266&dm=RM-941_eu_france_308&oemId=NOKIA&moId=&cf=&Flight=&SEG0=&SEG1=&SEG2=&SEG3=&SEG4=&SEG5=&optedOut=true';
+    // The page cookie is the only header the client reads back from a response
+    // (`WPSHeaderHandler::GetStorePageCookie`, @47028). It is set on the live config
+    // object here - so the next page request carries it - and cleared lower down, so
+    // that both halves are asserted without adding an exchange to the capture, which
+    // the checks below count.
+    config.livestore.protocol.pageCookie = 'selftest-cookie-value';
     const home = await httpsViaProxy({ ...target, requestPath: storeQuery, method: 'GET' });
     check('store protocol: the Store home page is served as the XML the phone reads',
       home.status === 200
@@ -1080,6 +1596,45 @@ async function main() {
         && !home.body.includes('&hw=402699266')
         && !home.body.includes('&dm=RM-941'),
       'a raw & in the self link would make the whole page unparseable');
+
+    check('store protocol: the page cookie reaches the device when one is configured',
+      home.headers['x-wp-storepage-cookie'] === 'selftest-cookie-value',
+      `cookie=${home.headers['x-wp-storepage-cookie']}`);
+    config.livestore.protocol.pageCookie = '';
+
+    // The pane type, on the page the proxy serves rather than on a page this file
+    // built: a value that reaches the builder and not the wire has happened here
+    // before, and the header is what makes the served document readable from the PC.
+    check('store protocol: the type every pane is given is on the served page and reported in its headers',
+      home.headers['x-lab-pane-type'] === 'Collection'
+        && home.body.split('<Type>Collection</Type>').length - 1 === sections.length,
+      `x-lab-pane-type=${home.headers['x-lab-pane-type']}`
+        + ` panes=${home.body.split('<Type>Collection</Type>').length - 1}/${sections.length}`);
+
+    // A pane with no data source is a pane the client downloads nothing for: the
+    // binary reads /DataSource/Type and /DataSource/Url per pane and fetches the
+    // content from there (@46528, next to /StorePage, /feed, /entry). So the page
+    // and the URL it hands out are asserted as one thing - read the source back out
+    // of the served page, fetch it exactly as the device would, and require the
+    // section the page promised.
+    const sourceMatch = /<DataSource><Type>([^<]+)<\/Type><Url>([^<]+)<\/Url><\/DataSource>/.exec(home.body);
+    const sourceUrl = sourceMatch ? new URL(sourceMatch[2].replace(/&amp;/g, '&')) : null;
+    check('store protocol: a pane names the source its content is downloaded from',
+      Boolean(sourceUrl)
+        && sourceUrl.host === target.targetHost
+        && sourceUrl.searchParams.get('category') === sections[0].title
+        && home.headers['x-lab-pane-sources'] === 'Applications',
+      sourceUrl ? `${sourceMatch[1]} -> ${sourceUrl.pathname}${sourceUrl.search}` : 'no data source in the page');
+    const sourceFeed = sourceUrl
+      ? await httpsViaProxy({ ...target, requestPath: `${sourceUrl.pathname}${sourceUrl.search}`, method: 'GET' })
+      : { status: 0, headers: {}, body: '' };
+    check('store protocol: the source URL answers with that pane\'s own section',
+      sourceFeed.status === 200
+        && sourceFeed.headers['x-lab-apps'] === String(sections[0].items.length)
+        && sourceFeed.headers['x-lab-category'] === sections[0].title.toLowerCase()
+        && sections[0].items.every((app) => sourceFeed.body.includes(`urn:uuid:${uuidForApp(app.id)}`)),
+      `status=${sourceFeed.status} apps=${sourceFeed.headers['x-lab-apps']}/${sections[0].items.length}`
+        + ` category=${sourceFeed.headers['x-lab-category']}`);
 
     const appList = await httpsViaProxy({ ...target, requestPath: '/v9/catalog/apps?chunkSize=50', method: 'GET' });
     check('store protocol: the application list answers with the catalog',
@@ -1109,6 +1664,11 @@ async function main() {
       hub.status === 200 && xmlProblem(hub.body) === null
         && hub.body.includes('lifestyle-IT-WindowsPhone81-ALL-ALL'),
       `status=${hub.status}`);
+    // The other half of the cookie, on a page request the suite already makes: an
+    // empty setting must leave the header off rather than minting a token.
+    check('store protocol: an empty page cookie is not invented',
+      hub.headers['x-wp-storepage-cookie'] === undefined,
+      `cookie=${hub.headers['x-wp-storepage-cookie']}`);
 
     const postPage = await httpsViaProxy({ ...target, requestPath: '/v9/catalog/storePages', method: 'POST' });
     check('store protocol: a non-GET is refused rather than answered',
@@ -1174,9 +1734,9 @@ async function main() {
     const decisions = indexLines.map((e) => e.decision);
     // One entry per intercepted request made above:
     // 4 rule cases + 1 plain-HTTP case + 1 direct-TLS case + 5 store-handler
-    // cases + 6 store-protocol cases.
+    // cases + 6 store-protocol cases + 1 fetched pane source.
     check('capture: every intercepted exchange was indexed',
-      indexLines.length === 17,
+      indexLines.length === 18,
       `entries=${indexLines.length} decisions=${JSON.stringify(decisions)}`);
     check('capture: decisions are labelled per rule',
       decisions.some((d) => d === 'passthrough:passthrough-endpoint')
@@ -1186,7 +1746,9 @@ async function main() {
       JSON.stringify(decisions));
     check('store: handler decisions are labelled with the handler name',
       decisions.includes('store:store-health') && decisions.includes('store:catalog-bridge')
-        && decisions.filter((d) => d === 'store:store-protocol').length === 6,
+        // Six page/feed requests plus the pane source the page itself named, which
+        // the suite fetched back through the proxy the way the device would.
+        && decisions.filter((d) => d === 'store:store-protocol').length === 7,
       JSON.stringify(decisions.filter((d) => d.startsWith('store:'))));
     const firstCapture = indexLines[0];
     check('capture: request and response bodies are stored',
@@ -1335,6 +1897,61 @@ async function main() {
     check('tools: canary labels a local probe as this PC and reads what it asked for',
       canary.code === 2 && /this PC, not the device/.test(canary.out) && /GET \/probe/.test(canary.out),
       `exit=${canary.code} deviceHits=${(canary.out.match(/DEVICE/g) || []).length}`);
+
+    // --- the sequence report -------------------------------------------------
+    // The two open experiments are read by *order*, not by count: did the
+    // configuration stop retrying, did the page arrive, and did anything follow it.
+    // `npm run analyze` answers the census question and cannot answer that one, and
+    // reading the index by eye is how E-001's verdict sat unread for hours.
+    const exchange = (ts, address, urlPath, status, host = 'marketplaceedgeservice.windowsphone.com') => ({
+      ts,
+      client: { address, port: 1 },
+      request: {
+        method: 'GET',
+        host,
+        path: `${urlPath}?os=8.10.14219.0&hw=402699266&dm=RM-941_eu_france_308`,
+        headers: {},
+      },
+      response: { status },
+      decision: status === 200 ? 'store:store-protocol' : 'passthrough',
+    });
+    const refused = sequence.summarize([
+      ...[0, 1, 2, 3].map((i) => exchange(`2026-10-16T06:20:2${i}.000Z`, '192.168.0.137', '/v8/Configuration/Stores/OEMStores/NOKIA', 502)),
+      ...[0, 1, 2, 3].map((i) => exchange(`2026-10-16T06:20:24.6${i}0Z`, '192.168.0.137', '/v8/Configuration/Stores/MOStores/', 502)),
+    ]);
+    check('sequence: a Store open that stops at configuration is read as exactly that',
+      refused.configuration.total === 8
+        && refused.configuration.byStore.OEM === 4
+        && refused.configuration.byStore.MO === 4
+        && refused.configuration.retries === 6
+        && refused.page.count === 0
+        && refused.afterFirstPage.length === 0,
+      `config=${refused.configuration.total} (${refused.configuration.byStore.OEM}/${refused.configuration.byStore.MO}) retries=${refused.configuration.retries} pages=${refused.page.count}`);
+
+    const withFollowUp = sequence.summarize([
+      exchange('2026-10-16T06:20:23.000Z', '192.168.0.137', '/v8/Configuration/Stores/OEMStores/NOKIA', 200),
+      exchange('2026-10-16T06:20:24.000Z', '192.168.0.137', '/v9/catalog/storePages', 200, 'cdn.marketplaceedgeservice.windowsphone.com'),
+      exchange('2026-10-16T06:20:25.000Z', '192.168.0.137', '/image/abc123', 200, 'cdn.marketplaceimages.windowsphone.com'),
+    ]);
+    check('sequence: the first request after the page is what the page is judged by',
+      withFollowUp.page.count === 1
+        && withFollowUp.afterFirstPage.length === 1
+        && /marketplaceimages/.test(withFollowUp.afterFirstPage[0].request.host)
+        && withFollowUp.configuration.retries === 0,
+      `after the first page: ${withFollowUp.afterFirstPage.map((entry) => entry.request.host).join(', ') || 'nothing'}`);
+
+    // The grouping rule that matters most here: a replay carries the phone's own
+    // `hw`/`dm` (F-012, footgun 4), so folding on hardware alone would let this PC's
+    // replay answer for the handset it is imitating.
+    const replayGroups = sequence.groupByDevice([
+      exchange('2026-10-16T05:54:18.000Z', '192.168.0.220', '/v9/catalog/storePages', 200, 'cdn.marketplaceedgeservice.windowsphone.com'),
+      exchange('2026-10-16T06:20:23.000Z', '192.168.0.137', '/v8/Configuration/Stores/OEMStores/NOKIA', 502),
+    ]);
+    check('sequence: a replay and the handset it imitates stay two groups',
+      replayGroups.length === 2
+        && replayGroups.some((group) => group.addresses.has('192.168.0.220'))
+        && replayGroups.some((group) => group.addresses.has('192.168.0.137')),
+      `${replayGroups.length} group(s): ${replayGroups.map((group) => [...group.addresses].join('+')).join(' | ')}`);
     // --- the certificate the mass storage route writes ---------------------
     // The CA reaches this phone by loading its own SOFTWARE hive on this PC, so what
     // has to be right here is the value that goes into that hive: the shape the phone
@@ -1429,6 +2046,35 @@ async function main() {
     await new Promise((resolve) => upstream.close(resolve));
     await new Promise((resolve) => echo.close(resolve));
   }
+
+  // The census against the capture this run just wrote.
+  //
+  // Everything the suite drives arrives from loopback, which is how any machine
+  // that answers DNS sees its own client, so every row must come out marked. A
+  // device row here would mean the rule is wrong in the direction that matters:
+  // this PC's own traffic read as the phone's, which is how F-012 was misread the
+  // first time.
+  const suiteCaptureRoot = path.join(WORK, 'captures');
+  const suiteDns = await readDnsQueries(suiteCaptureRoot);
+  const suiteExchanges = [];
+  for (const entry of fs.readdirSync(suiteCaptureRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const indexPath = path.join(suiteCaptureRoot, entry.name, 'index.jsonl');
+    if (!fs.existsSync(indexPath)) continue;
+    for await (const line of readJsonl(indexPath)) {
+      try { suiteExchanges.push(JSON.parse(line)); } catch { /* torn line */ }
+    }
+  }
+  const suiteRows = buildClientRows({
+    http: groupHttpClients(suiteExchanges),
+    dns: suiteDns.byClient,
+    localIps: localAddresses(config),
+  });
+  check('census: the capture this run wrote is read, and every row in it is this PC',
+    suiteExchanges.length > 0 && suiteDns.byClient.size > 0
+      && suiteRows.length > 0 && suiteRows.every((row) => row.thisPc),
+    `${suiteExchanges.length} exchanges, ${suiteDns.byClient.size} DNS client(s), rows=`
+      + suiteRows.map((row) => `${row.address}=${row.kind}`).join(' '));
 
   const failed = results.filter((r) => !r.ok);
   console.log('');

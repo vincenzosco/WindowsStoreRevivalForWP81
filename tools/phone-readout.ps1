@@ -28,7 +28,13 @@
 # means taking ownership - a write to the device, and a decision, not a mechanic.
 #
 # The volume is discovered, never assumed: it was G: in the first session and H: on
-# 2026-10-15, and the markers it probes are ones a normal user can read.
+# 2026-10-15. Discovery is scored on *phone-only* structure, and this is the one bug in here
+# that produced false evidence rather than an error: an earlier version accepted
+# `\Windows\System32\config\SOFTWARE` as a marker, a normal user cannot see that path on this
+# PC but an elevated prompt can - so the elevated run, the mode this tool exists for, matched
+# this machine's own Windows installation, chose `C:`, and reported the phone's logs, cache
+# and ACLs as *absent*. Absent reads as proof, which is why every marker below is either
+# Windows Phone only or weightless.
 
 param(
   # PowerShell variable names are case-INsensitive, so this must not be called `$Out` while
@@ -65,22 +71,41 @@ Line ("uscita : " + (Resolve-Path -LiteralPath $OutDir).Path)
 Line ''
 Line '=== volumi, e quale e il telefono ==='
 $phone = $null
-$markers = @('\Data\Users\Public', '\Data\SharedData', '\Windows\System32\config\SOFTWARE')
+# Weighted, and every weight is a claim about what only a phone has. `EdmCache` is the
+# response cache (Windows Phone only, and unreadable without elevation - which is why it is
+# not the only marker). `\Data\Users\Public` and `\Data\SharedData` are the phone's own tree
+# layout, readable by a normal user. The hive is listed at weight 0 so it still *prints* -
+# it is useful to see - but it can never decide: this PC has it too.
+$markers = @(
+  @{ path = '\Data\SharedData\EdmCache'; weight = 3 },
+  @{ path = '\Data\Users\Public'; weight = 2 },
+  @{ path = '\Data\SharedData'; weight = 1 },
+  @{ path = '\Windows\System32\config\SOFTWARE'; weight = 0 }
+)
+# The machine this runs on is never the phone, whatever it carries.
+$system = ($env:SystemDrive -replace ':$', '')
+$bestScore = 0
 foreach ($v in (Get-Volume | Where-Object { $_.DriveLetter })) {
   $letter = $v.DriveLetter
-  $hit = ''
+  $hits = @()
+  $score = 0
   foreach ($m in $markers) {
     # -ErrorAction SilentlyContinue: a marker inside a tree this prompt may not read answers
     # "Accesso negato", which is exactly the signal that matters, not an error to print.
-    if (Test-Path -LiteralPath ("${letter}:" + $m) -ErrorAction SilentlyContinue) { $hit = $m; break }
+    if (Test-Path -LiteralPath ("${letter}:" + $m.path) -ErrorAction SilentlyContinue) {
+      $hits += $m.path
+      $score += $m.weight
+    }
   }
   # NOTE: no ternary here on purpose. `$a ? $b : $c` is PowerShell 7 and later; this file has to
   # run on the Windows PowerShell 5.1 that ships with Windows, where `?` is a parse error.
-  $shown = if ($hit) { $hit } else { '(nessuno)' }
-  Line ("  " + $letter + ": " + $v.FileSystem + "  " + [math]::Round($v.Size / 1GB, 2) + " GB  marker: " + $shown)
-  if ($hit -and -not $phone) { $phone = "${letter}:" }
+  $shown = if ($hits.Count) { ($hits -join ' + ') } else { '(nessuno)' }
+  $note = ''
+  if ($letter -eq $system) { $note = '   <- questa macchina' }
+  Line ("  " + $letter + ": " + $v.FileSystem + "  " + [math]::Round($v.Size / 1GB, 2) + " GB  punti " + $score + "  marker: " + $shown + $note)
+  if ($letter -ne $system -and $score -gt $bestScore) { $phone = "${letter}:"; $bestScore = $score }
 }
-Line ("  volume scelto : " + $phone)
+Line ("  volume scelto : " + $phone + "  (punti " + $bestScore + ")")
 if (-not $phone) {
   Line 'NESSUN volume del telefono riconosciuto: il telefono non e in mass storage?'
   Line ("fine   : " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
@@ -105,9 +130,13 @@ try {
 }
 
 Line ''
-Line '=== le voci storePages: copiate fuori e aperte ==='
-$store = @($entries | Where-Object { $_.Name -match 'storePages' } | Sort-Object LastWriteTime)
-Line ("  " + $store.Count + " voci storePages")
+Line '=== le voci in cache: copiate fuori e aperte ==='
+# Every entry, not only the ones whose name spells the request. On 2026-10-17 the client was
+# found holding the page under `Short\9\7f3c9a52b1e84d0f9a6c2e58d4b1073c$48b1e555.zmz` - the
+# name is the page cookie plus a hash and contains no `storePages` at all - so a name filter
+# reports one cached page where there are two, and the one it drops is the newest.
+$store = @($entries | Where-Object { $_.FullName -notmatch '\\Keepers\\' } | Sort-Object LastWriteTime)
+Line ("  " + $store.Count + " voci in cache (Keepers esclusi)")
 foreach ($e in $store) {
   $safe = ($e.LastWriteTime.ToString('HHmmss') + '_' + $e.Length + '_' + ($e.Name -replace '[^A-Za-z0-9._=-]', '_'))
   if ($safe.Length -gt 120) { $safe = $safe.Substring(0, 120) }

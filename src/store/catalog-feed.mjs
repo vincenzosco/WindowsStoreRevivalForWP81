@@ -336,8 +336,8 @@ function imageXml(app) {
  * `tag` is the element around it: `application` inside a section, `a:entry` in a
  * list. The two differ only in that envelope, so the fields live here once.
  */
-function applicationFields(app, now) {
-  return `<title>${text(app.name || app.title || 'Untitled')}</title>`
+function applicationFields(app, now, { withTitle = true } = {}) {
+  return (withTitle ? `<title>${text(app.name || app.title || 'Untitled')}</title>` : '')
     + `<sortTitle>${text(app.name || app.title || 'Untitled')}</sortTitle>`
     + `<releaseDate>${normalizeReleaseDate(app.release_date || app.releaseDate)}</releaseDate>`
     + `<version>${text(normalizeVersion(app.version))}</version>`
@@ -360,15 +360,39 @@ function applicationXml(app, now) {
   return `<application><id>urn:uuid:${uuidForApp(app.id)}</id>${applicationFields(app, now)}</application>`;
 }
 
-/** The application as a list feed carries it. */
-function applicationEntryXml(app, now, feedImpression) {
+/**
+ * The application as a list feed carries it.
+ *
+ * Two fields of this entry are set from what the archived responses of the real
+ * service carry, and both are read off the raw bytes rather than remembered:
+ *
+ * `rank` writes `<k>`, the one element that appears in **both** archived
+ * generations of this endpoint - `/v9/catalog/apps` (2016-05-06) and
+ * `/v8/catalog/apps` (2013-12-16) - and in nothing this lab has ever served. It
+ * sits immediately after `<impressionId>`, before `<isUniversal>`, on every
+ * entry of both captures, and its arithmetic is the same in both: **4** on the
+ * first entry, +1 each, which is `position + 3` over 14 entries and over 50. The
+ * offset of 3 is observed and not explained; it is a configurable seed rather
+ * than a constant for exactly that reason. `null` writes no `<k>` at all, which
+ * is every feed this lab served before.
+ *
+ * `entryTitle` writes the bare `<title>` that every entry this lab served before
+ * carried and that **neither** archived feed entry carries: in both captures the
+ * only `<title>` at entry level is the one inside a `<category>`, and the app's
+ * own name travels as `<a:title type="text">` plus `<sortTitle>`. The archived
+ * *page* (`/v8/catalog/hubs`) is the opposite - its `<application>` blocks do
+ * carry a bare `<title>` - which is why that one is written by
+ * `applicationFields` and only the list entry turns it off.
+ */
+function applicationEntryXml(app, now, feedImpression, { rank = null, entryTitle = true } = {}) {
   return '<a:entry>'
     + `<a:updated>${feedStamp(now)}</a:updated>`
     + `<a:title type="text">${text(app.name || app.title || 'Untitled')}</a:title>`
     + `<a:id>urn:uuid:${uuidForApp(app.id)}</a:id>`
     + '<isHardwareCompatible>true</isHardwareCompatible>'
-    + applicationFields(app, now)
+    + applicationFields(app, now, { withTitle: entryTitle })
     + `<impressionId>${text(feedImpression)}:API.BDIGeneric</impressionId>`
+    + (rank === null ? '' : `<k>${text(rank)}</k>`)
     + '<isUniversal>false</isUniversal>'
     + '</a:entry>';
 }
@@ -433,19 +457,90 @@ function applicationsXml(items, now) {
  * more at all. This variant hands the items over where the pane is. The document
  * is otherwise identical - same root, same template block, same feed underneath -
  * so a change in what the device does is attributable to this and nothing else.
+ *
+ * `dataSource` is the other, and it is not an arrangement of the same content: it
+ * is a *pointer*, and the client downloads what it points at. The pane's own
+ * property map (`PANE_FIELDS` in vocabulary.mjs) holds `/DataSource/Type` and
+ * `/DataSource/Url`, `ProcessEntryFromType` creates its objects from `FeedType` and
+ * `Url` together, and `PendingListDownload::*` is the download that follows. So a
+ * pane has two ways to be given content - inline, and by reference - and until now
+ * this lab served only the first.
+ *
+ * The three capitalised fields are written here because the pane's map spells them
+ * that way (`/Id`, `/Title`) where the entries below spell theirs in lower case
+ * (`/id`, `/title`). Both are written for the title rather than one replacing the
+ * other: which of the two a *pane* is read through is not settled, and the lower
+ * case one was already being sent.
+ *
+ * @param {object} options
+ * @param {boolean} [options.withItems]
+ * @param {{type: string, urlFor: Function, maxItems: number, minItems: number}} [options.dataSource]
+ * @param {string} [options.paneType] what a pane *is*, when the caller wants it said
+ * @param {string} [options.paneSubType]
  */
-function panesXml({ sections, withItems = false, now }) {
+function panesXml({ sections, withItems = false, now, dataSource = null, paneType = '', paneSubType = '' }) {
   const panes = sections.map((section, index) => {
     const collection = uuidForCollection(section.title || `section-${index + 1}`);
     const items = section.items || [];
+    const title = text(section.title || 'List Of Items');
     return `<${PANE_ELEMENT}>`
+      + `<Id>${collection}</Id>`
+      + `<Title>${title}</Title>`
+      + paneKindXml(paneType, paneSubType)
       + `<index>${index + 1}</index>`
-      + `<title>${text(section.title || 'List Of Items')}</title>`
+      + `<title>${title}</title>`
       + `<link><type>${CONTENT_LINK_TYPE}</type><target>${collection}</target></link>`
+      + `<CollectionId>${collection}</CollectionId>`
+      + dataSourceXml(section, dataSource)
       + (withItems ? editorialItemsXml(items) + applicationsXml(items, now) : '')
       + `</${PANE_ELEMENT}>`;
   }).join('');
   return `<${PANE_CONTAINER}>${panes}</${PANE_CONTAINER}>`;
+}
+
+/**
+ * What kind of object a pane is, as the pane's own property map spells it.
+ *
+ * These are the last two fields of that map this lab writes nothing for (`/Type`,
+ * `/SubType`), and there is one piece of evidence for a value rather than none: the
+ * literal pool of `ProcessEntryFromType` - the function that logs `Found %d Store
+ * Panes`, reads `/Panes/Pane` and creates objects from a `FeedType` and a `Url` -
+ * holds the token **`inv`**, twice, between `/Templates/Template` and `/Templates`.
+ * The same token opens the object-code table at @20112, where every other code
+ * (`app`, `fea`, `col`, `sto`) names a family this shop deals in.
+ *
+ * Omitted when nothing is configured, so a page can be served with no type at all -
+ * which is the page that has been delivered so far and whose result is already
+ * recorded. An empty value is not a claim that empty is right.
+ */
+function paneKindXml(paneType, paneSubType) {
+  const type = String(paneType || '').trim();
+  const subType = String(paneSubType || '').trim();
+  return (type ? `<Type>${text(type)}</Type>` : '')
+    + (subType ? `<SubType>${text(subType)}</SubType>` : '');
+}
+
+/**
+ * Where a pane's content comes from: a type, a URL, and how much of it to take.
+ *
+ * Omitted entirely when no data source was asked for, so that the page this lab
+ * served before is still servable byte for byte - an experiment that cannot be
+ * un-armed is not an experiment.
+ *
+ * A section whose URL builder returns nothing (no data source for it) is left
+ * pointing at the collection it already names, which is what every page before
+ * this did.
+ */
+function dataSourceXml(section, dataSource) {
+  if (!dataSource) return '';
+  const url = dataSource.urlFor ? dataSource.urlFor(section) : null;
+  if (!url) return '';
+  return '<DataSource>'
+    + `<Type>${text(dataSource.type)}</Type>`
+    + `<Url>${escapeXml(url)}</Url>`
+    + '</DataSource>'
+    + `<MaxItems>${text(dataSource.maxItems)}</MaxItems>`
+    + `<MinItems>${text(dataSource.minItems)}</MinItems>`;
 }
 
 /**
@@ -477,7 +572,7 @@ function templateBlockXml({ templateName, templateType, typeKeyForm = 'both' }) 
 
 function feedHeader({
   selfHref, updated, title, id, impression, sections, templateName, templateType, typeKeyForm,
-  blocks = true,
+  blocks = true, dataSource = null, paneType = '', paneSubType = '',
 }) {
   return '<?xml version="1.0" encoding="utf-8"?>'
     + `<a:feed xmlns:a="${ATOM_NS}" xmlns:os="${OPEN_SEARCH_NS}" xmlns="${CATALOG_NS}">`
@@ -490,7 +585,7 @@ function feedHeader({
     // two paths in - the closest thing to evidence about document order that the
     // phone offers. Omitted when the caller places them one level up, under the
     // page root, which is where the page grammar puts them.
-    + (blocks && sections ? panesXml({ sections }) : '')
+    + (blocks && sections ? panesXml({ sections, dataSource, paneType, paneSubType }) : '')
     + (blocks ? templateBlockXml({ templateName, templateType, typeKeyForm }) : '');
 }
 
@@ -533,12 +628,19 @@ export function normalizePageFormat(value) {
  *   with. `storePage` and `panes` are both rooted at `<StorePage>` and differ only
  *   in whether each pane carries its section's items; `atom` is the older
  *   `<a:feed>` root.
+ * @param {{type: string, urlFor: Function, maxItems: number, minItems: number}} [options.dataSource]
+ *   the per-pane data source; omitted means the panes carry none, which is what
+ *   every page this lab served before did.
+ * @param {string} [options.paneType] the pane's own type, written into every pane
+ *   when set. Empty means the pages this lab served before, which carried none.
+ * @param {string} [options.paneSubType] the pane's own sub type, same rule.
  * @param {Date} [options.now]
  * @returns {string} XML
  */
 export function buildStorePageFeed({
   sections = [], selfHref = '/', id = 'storePage', title = 'List Of Items',
-  templateName, templateType, typeKeyForm, pageFormat, now = new Date(),
+  templateName, templateType, typeKeyForm, pageFormat, dataSource = null,
+  paneType = '', paneSubType = '', now = new Date(),
 } = {}) {
   const format = normalizePageFormat(pageFormat);
   const stamp = feedStamp(now);
@@ -561,16 +663,25 @@ export function buildStorePageFeed({
   const wantsPageRoot = format === 'storePage' || format === 'panes';
 
   // The page root holds the panes and the template block as its own children and
-  // the feed beside them, rather than the feed holding everything. The feed keeps
-  // the namespace declarations it needs, which scopes them to that subtree exactly
-  // as before, and the archive-verified entries stay where they were. In `panes`
+  // the feed beside them, rather than the feed holding everything. In `panes`
   // format the panes additionally carry the items their entries already carry, so
   // that variant adds to this document instead of replacing it.
+  //
+  // The root declares the same three namespaces the feed used to declare alone.
+  // Declaring them only on the nested feed left `StorePage`, `Panes`, `Template`
+  // and everything inside a pane in *no* namespace, which is a document no
+  // Microsoft service emits: the archived real response declares them on its own
+  // root, and the parser references `http://schemas.zune.net/catalog/apps/2008/02`
+  // (at `@118040`, beside `XMLSchema-instance`) and the literal `xmlns` inside
+  // `PendingListDownload::ParseFromStream` (`@27812`). The declarations therefore
+  // belong on the document element. The feed keeps its own copies, which are
+  // redundant, legal, and leave the archive-verified subtree byte-identical.
   const header = feedHeader({
     selfHref, updated: stamp, title, id, impression,
     sections: wantsPageRoot ? null : sections,
     templateName, templateType, typeKeyForm,
     blocks: !wantsPageRoot,
+    dataSource, paneType, paneSubType,
   });
   const feed = header + entries + feedFooter();
 
@@ -580,8 +691,8 @@ export function buildStorePageFeed({
   // is lifted out before the root is wrapped around the feed.
   const withoutDeclaration = feed.replace(/^<\?xml[^?]*\?>/, '');
   return '<?xml version="1.0" encoding="utf-8"?>'
-    + `<${STORE_PAGE_ROOT}>`
-    + panesXml({ sections, withItems: format === 'panes', now })
+    + `<${STORE_PAGE_ROOT} xmlns:a="${ATOM_NS}" xmlns:os="${OPEN_SEARCH_NS}" xmlns="${CATALOG_NS}">`
+    + panesXml({ sections, withItems: format === 'panes', now, dataSource, paneType, paneSubType })
     + templateBlockXml({ templateName, templateType, typeKeyForm })
     + withoutDeclaration
     + `</${STORE_PAGE_ROOT}>`;
@@ -621,13 +732,137 @@ export function buildProductUpdatesResponse({ skus = [] } = {}) {
 }
 
 /**
+ * The answer to `GET /v8/Configuration/Stores/OEMStores/<oem>` and
+ * `/MOStores/`, the two requests this phone makes when the Store opens.
+ *
+ * **The grammar is the device's own; the values are this lab's.** That distinction
+ * is the whole of what changed on 2026-10-17 and it is worth stating exactly.
+ *
+ * The frame is taken from a configuration file the client itself ships and reads:
+ * `<ConfigurationFile version="81000" forceupdate="0"><Domains><Domain id="PROD">
+ * <setting id="...">value</setting>`. That file is on the device and in the
+ * offline image (`RMRoot\Windows\System32\...\*ConfigurationFile*.xml`), it is the
+ * one `ZMarketplace.dll` parses, and its settings are exactly the
+ * `MktConfigSetting_*` names the DLL's own pool enumerates. Inside it every service
+ * base is a `<setting>`, e.g.
+ * `<setting id="WPAppsMarketplaceShopSecure" nexus="WPAppsMarketplaceShopSecure">
+ * https://marketplaceedgeservice.windowsphone.com/</setting>`, and those settings
+ * are the `{Placeholder}` tokens the endpoint table substitutes:
+ * `{WPAppsMarketplaceShopSecure}v8/Configuration/Stores/OEMStores/{DeviceRawOEMID}`.
+ *
+ * What is *inferred* - one step, and not hidden: that these two endpoints answer in
+ * that same grammar. The inference is strong for a reason worth writing down. The
+ * device's own file lists every `WPAppsMarketplace*` base but **not one store
+ * setting** (`OEMStoreID`, `MOStoreID`, `MOUniqueID`, `CatalogLocale` are all
+ * absent - checked against the image, not assumed), so the store family is
+ * supplied from somewhere else, and the two places the client asks at start-up are
+ * these. No capture of either endpoint exists (F-020, F-021), so the frame is
+ * evidenced and the pairing of frame to endpoint is not.
+ *
+ * This replaces an invented `<StoreConfiguration>` document whose element names
+ * were this lab's from first byte to last. `x-lab-invented: 1` still rides the
+ * response, because the *values* (which store answered, where the page comes from,
+ * the locale) are this lab's answers to a service that no longer exists - the
+ * header now means that, and not "this markup is made up".
+ *
+ * Two omissions are deliberate. `WPAppsMarketplaceTunerService`
+ * (`marketplaceconfigservice.windowsphone.com`) is left out: it is not hijacked,
+ * so writing it would point the client's next configuration fetch at the real
+ * server, and a wrong base is a failure this lab injects. And the build stamp is
+ * the one the shipped file declares (`81000`), not a value derived from
+ * `mpcVersion`, because a file version the client has never seen is a rejection
+ * nobody would trace back to here.
+ *
+ * @param {object} options
+ * @param {'OEMStore'|'MOStore'} [options.storeType] which of the two endpoints this answers.
+ * @param {string} [options.storeId] the OEM/operator id the request path named, e.g. `NOKIA`.
+ * @param {string} [options.cc] market.
+ * @param {string} [options.lang] locale, written as `CatalogLocale` and as `{locale}`'s base.
+ * @param {string} [options.scheme] the scheme the request arrived on.
+ * @param {string} [options.host] the host the request arrived on.
+ * @param {string} [options.mpcVersion] the `mpcVersion` the client asked with.
+ * @param {Date} [options.now]
+ * @returns {string} XML
+ */
+export function buildStoreConfiguration({
+  storeType = 'MOStore', storeId = '', cc = 'IT', lang = 'it-IT',
+  scheme = 'http', host = 'marketplaceedgeservice.windowsphone.com',
+  mpcVersion = '8.10', now = new Date(),
+} = {}) {
+  const secure = scheme === 'http' ? 'https' : 'http';
+  const lines = [];
+  // A service base carries `nexus=` in the shipped file; a store setting does not.
+  // Both spellings are copied from it rather than unified, because a normalised
+  // document is a document this client has never parsed.
+  const base = (id, written) => lines.push(`\n      <setting id="${id}" nexus="${id}">${text(written)}</setting>`);
+  const value = (id, written) => lines.push(`\n      <setting id="${id}">${text(written)}</setting>`);
+
+  // Where the page, the list, the images and the update check come from. The host
+  // is the one the request arrived on, so the client keeps talking to this lab…
+  base('WPAppsMarketplaceShop', `${scheme}://${host}/`);
+  base('WPAppsMarketplaceShopSecure', `${secure}://${host}/`);
+  base('WPAppsMarketplaceBuy', `${secure}://${host}/`);
+  base('WPAppsMarketplaceAccounts', `${secure}://${host}/`);
+  base('WPAppsMarketplaceReview', `${secure}://${host}/`);
+  base('WPAppsMarketplaceTelemetry', `${secure}://${host}/`);
+  // …and the two CDNs are named, not derived: a CDN base built as `cdn.<ip>` is a
+  // hostname no resolver can answer, and these two are the names `config.json`
+  // already hijacks (`*.marketplaceedgeservice.*`, `*.marketplaceimages.*`) and the
+  // ones the shipped file itself supplies for this family.
+  base('WPAppsMarketplaceShopCdn', `${scheme}://cdn.marketplaceedgeservice.windowsphone.com/`);
+  base('WPAppsMarketplaceImageService', 'http://cdn.marketplaceimages.windowsphone.com/');
+
+  // The store family: the settings the shipped file does *not* carry, which is why
+  // this endpoint exists at all. An empty id is left out rather than written blank,
+  // because a setting with no value is a store this client cannot name.
+  if (storeId) value(storeType === 'OEMStore' ? 'OEMStoreID' : 'MOStoreID', storeId);
+  // Nothing from the request's own query is echoed back as a setting. `cc`, `lang`
+  // and `mpcVersion` are `EndpointParameter`s in the shipped file - values the
+  // client supplies per call - so writing them here would be this lab answering a
+  // question the client did not ask, in a document whose parser has never seen it.
+
+  return '<?xml version="1.0" encoding="utf-8"?>'
+    + '<ConfigurationFile version="81000" forceupdate="0">'
+    + '<Domains>'
+    + '<Domain id="PROD">'
+    + lines.join('')
+    + '</Domain>'
+    + '</Domains>'
+    + '</ConfigurationFile>';
+}
+
+/**
  * A flat application list, the shape `/v8/catalog/apps` and `/v9/catalog/apps`
  * answer with. That endpoint is what a browse or search screen reads.
+ *
+ * @param {number|string|null} [options.entryRank] the `<k>` the **first** entry
+ *   carries; each next entry carries one more. `null` or `''` writes none, which
+ *   is the feed this lab served before either archived response was read. The
+ *   value the real service uses is 4 - see `applicationEntryXml` for why the 4
+ *   is recorded as a number rather than as a meaning.
+ * @param {boolean} [options.entryTitle] whether an entry also writes the bare
+ *   `<title>` this lab wrote before. The archived feeds of both generations say
+ *   no; the archived page says yes for its `<application>` blocks, so the two
+ *   builders answer separately.
+ *
+ * The feed's own framing is already the archived one and is not affected by
+ * either option: feed-level `rel="self"`, `a:updated`, `a:title`, `a:id`,
+ * `impressionId`, then the entries, then `a:author`. The v8 capture additionally
+ * carries `<a:link rel="next">` and `<pagingToken>` - and the v9 capture of the
+ * same endpoint does not - so paging is a property of the older generation's
+ * service and not of the entry shape, and nothing here writes it.
  */
-export function buildApplicationListFeed({ apps = [], selfHref = '/', id = 'apps', title = 'List Of Items', now = new Date() }) {
+export function buildApplicationListFeed({
+  apps = [], selfHref = '/', id = 'apps', title = 'List Of Items', now = new Date(),
+  entryRank = null, entryTitle = true,
+}) {
   const stamp = feedStamp(now);
   const impression = impressionId(`${id}:${stamp}`);
+  const seed = entryRank === null || entryRank === '' ? NaN : Number(entryRank);
+  const rankFor = Number.isFinite(seed) ? (index) => seed + index : () => null;
   return feedHeader({
     selfHref, updated: stamp, title, id, impression, templateName: null,
-  }) + apps.map((app) => applicationEntryXml(app, now, impression)).join('') + feedFooter();
+  }) + apps.map((app, index) => applicationEntryXml(app, now, impression, {
+    rank: rankFor(index), entryTitle,
+  })).join('') + feedFooter();
 }

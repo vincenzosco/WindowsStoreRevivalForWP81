@@ -11,6 +11,10 @@
 // source: "zinc"    -> live Live Store catalog (needs livestore.apiKey)
 //         "fixture" -> bundled sample catalog, works offline with no key
 //
+// The JSON API the *Live Store client* on the handset speaks is a different
+// handler, `createLiveClient` below: same catalog, the shape that client parses,
+// off by default and matched on its own host name (F-029).
+//
 // Handlers are factories closing over the shared config object, so a hot reload
 // that mutates `config.livestore` is picked up without rebuilding the router.
 
@@ -19,6 +23,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isInterceptedHost } from '../config.mjs';
 import { createStoreProtocol } from './protocol.mjs';
+import { createStoreImages } from './images.mjs';
+import {
+  detailDocument, entryById, listDocument, liveCatalog, liveRoute,
+} from './live-client.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.join(HERE, 'fixtures', 'sample-catalog.json');
@@ -181,7 +189,118 @@ export function createStoreHealth(config) {
   };
 }
 
+function liveClientSettings(config) {
+  return {
+    enabled: false,
+    host: 'store-api.live.net.co',
+    catalogFile: 'src/store/fixtures/demo-catalog.json',
+    limit: 0,
+    ...(config.livestore?.client || {}),
+  };
+}
+
+/**
+ * The JSON API of the Live Store client found on the handset (F-029).
+ *
+ * Matched on the host alone, because every path under it belongs to that one
+ * client's protocol; the routes and the evidence for each field are in
+ * `live-client.mjs`. Nothing here falls back to the operator's real service: the
+ * host is either answered by this handler or left alone, and that choice is the
+ * `enabled` flag.
+ *
+ * Arming it for the handset takes three touchpoints, not one: the flag here, the
+ * host in `proxy.mitm.hosts` (the guard below refuses anything else with 421,
+ * because the router sees every request that reaches the lab), and the host in
+ * `dns.hijack.names` (without which the handset never comes here). That client
+ * works today against the real service, so no single value may take its catalog
+ * away.
+ */
+export function createLiveClient(config) {
+  return {
+    name: 'store-live-client',
+    description: 'Answers the Live Store client JSON API (/apps, /games, /apps/search, /app/{id}) from the catalog.',
+
+    match(ctx) {
+      const settings = liveClientSettings(config);
+      if (!settings.enabled) return false;
+      const host = String(ctx.host || '').toLowerCase().split(':')[0];
+      return host === String(settings.host || '').toLowerCase();
+    },
+
+    async handle(ctx) {
+      const settings = liveClientSettings(config);
+      // Same guard the other Store handlers carry, and here it is what makes the
+      // two edits real: the router is consulted for every request that reaches
+      // the lab, so without this a bare `Host:` header would be enough to have
+      // the lab answer for a name it was never told to intercept.
+      if (!isInterceptedHost(config, ctx.host)) {
+        return jsonResponse({ error: 'host_not_intercepted', host: ctx.host }, 421, { 'x-lab-source': 'live-client' });
+      }
+
+      const headers = {
+        'x-lab-source': 'live-client',
+        'x-lab-invented': '1',
+        'cache-control': 'no-store',
+      };
+
+      if (ctx.method !== 'GET') {
+        return jsonResponse({ error: 'method_not_allowed', hint: 'this API answers GET only' }, 405, headers);
+      }
+
+      const route = liveRoute(ctx.path);
+      if (route.action === 'unknown') {
+        return jsonResponse({ error: 'not_found', path: ctx.path }, 404, headers);
+      }
+      if (route.action === 'me') {
+        // The real one answers the signed-in account. The lab has no session and
+        // will not invent one: a fabricated identity in this field is the one lie
+        // a client could act on.
+        return jsonResponse({
+          success: false,
+          error: 'auth_required',
+          note: 'the account record needs the client\'s own sign-in, which the lab does not have',
+        }, 401, headers);
+      }
+
+      const url = new URL(ctx.path, 'http://store.local');
+      const query = url.searchParams.get('q') || '';
+      if (route.action === 'search' && !query.trim()) {
+        return jsonResponse({ error: 'q_required', hint: 'the search routes take ?q=<term>' }, 400, headers);
+      }
+
+      const catalog = liveCatalog(settings.catalogFile);
+
+      if (route.action === 'detail') {
+        const found = entryById(catalog, route.kind, route.id);
+        if (!found) return jsonResponse({ error: 'not_found', id: route.id }, 404, headers);
+        return jsonResponse(detailDocument(found.app, found.id), 200, headers);
+      }
+
+      const document = listDocument(catalog, {
+        kind: route.kind,
+        q: query,
+        category: url.searchParams.get('category') || '',
+        limit: Number(settings.limit) || 0,
+      });
+      const count = (document[route.kind] || []).length;
+      if (!count && route.kind === 'games' && !catalog.games.length) {
+        headers['x-lab-note'] = 'the catalog this lab serves carries no games';
+      }
+      headers['x-lab-count'] = String(count);
+      return jsonResponse(document, 200, headers);
+    },
+  };
+}
+
 /** Handler list in priority order. */
 export function buildHandlers(config) {
-  return [createStoreHealth(config), createStoreProtocol(config), createCatalogBridge(config)];
+  return [
+    createStoreHealth(config),
+    // Before the protocol handler: the image CDN is another host, and an image
+    // path that reached the page routes would be answered with a page.
+    createStoreImages(config),
+    createStoreProtocol(config),
+    createLiveClient(config),
+    createCatalogBridge(config),
+  ];
 }
