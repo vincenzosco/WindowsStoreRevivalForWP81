@@ -28,7 +28,7 @@ sul sistema.
 | Blob di registro per la CA root | ✅ **byte-identico** a quello che produce Windows |
 | Client Zinc (Live Store API) | ✅ 5/5 contro il servizio live, incluso il rifiuto `AC5` |
 | Handler Store (`src/store/`) + bridge catalogo | ✅ verificato |
-| Self-test end-to-end (meccanismi, su 127.0.0.1) | ✅ **187/187** |
+| Self-test end-to-end (meccanismi, su 127.0.0.1) | ✅ **190/190** |
 | Prova di schieramento sui nomi host reali dello Store | ✅ **44/44** |
 | Vocabolario dello Store letto dal telefono, e riverificabile | ✅ **19/19** (`npm run read-vocabulary`) |
 | Cattura reale dallo Store del Lumia (RM-941) | ✅ la pagina viene chiesta, ed è etichettata (`storePages`, `type=003`) |
@@ -523,9 +523,13 @@ questo che decide `livestore.protocol.source`.
 }
 ```
 
-La chiave va in `ZINC_API_KEY`, non in `config.json`: quel file è tracciato da git, quindi una
-chiave scritta lì è una chiave nella storia del repository alla prima commit. `livestore.apiKey`
-funziona ancora come seconda scelta.
+La chiave sta fuori da `config.json`: quel file è tracciato da git, quindi una chiave scritta lì
+finisce nella storia del repository alla prima commit. Si legge da due posti, in quest'ordine:
+`ZINC_API_KEY` dall'ambiente, e un file `.zinc-key` (ignorato da git) accanto a `config.json`
+con la chiave sulla prima riga. Il file serve quando il lab viene riavviato da
+`tools\restart-lab.cmd`: quel rilancio è elevato e parte da una finestra senza il tuo ambiente,
+quindi una variabile esportata non arriva al processo con cui parla il telefono.
+`livestore.apiKey` funziona ancora come ultima scelta, ed è quella da evitare.
 
 Zinc non ha un endpoint che elenchi tutte le app — nomina le sue categorie e rifiuta una query
 più corta di cinque caratteri — quindi il catalogo viene **assemblato**: a ogni categoria si
@@ -658,7 +662,7 @@ stampa l'equivoco invece di darlo per assodato.
 
 #### Cosa è provato e cosa no
 
-Provato su questa macchina (`npm run selftest`, 109 controlli, e `npm run rehearse`: 44 con i nove
+Provato su questa macchina (`npm run selftest`, 190 controlli, e `npm run rehearse`: 44 con i nove
 nomi dello Store, più quattro per ogni nome aggiunto alla lista di dirottamento — 68 con i
 quindici di oggi): il
 feed è ben formato; una voce di catalogo ostile (un `&` grezzo, un `<`, virgolette, un
@@ -794,7 +798,7 @@ realm "Live Store". Verificato: senza `X-OneLive-Key` la API risponde
 `400 {"success":false,"message":"...missing the X-OneLive-Key..."}` — anche sui feed
 RSS, che la documentazione dichiara aperti.
 
-Metti la chiave in `config.json` → `livestore.apiKey` e il client è pronto a essere
+Metti la chiave in `ZINC_API_KEY` o in `.zinc-key` (vedi sopra), e il client è pronto a essere
 usato dai futuri handler.
 
 ---
