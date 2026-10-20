@@ -233,6 +233,14 @@ export function loadConfig(configPath = 'config.json') {
   }
   const config = deepMerge(DEFAULTS, raw);
 
+  // The Live Store key travels by environment first: config.json is tracked by git,
+  // and a key written into it is a key in the repository's history the first time
+  // it is committed. Applied once here rather than at each reader, so the Zinc
+  // client, the status endpoint and the protocol handler all see the key that is
+  // actually in force - a key that worked for one and not the other would read as
+  // the service refusing a key it had already accepted.
+  if (process.env.ZINC_API_KEY) config.livestore.apiKey = process.env.ZINC_API_KEY;
+
   const lanIp = detectLanIp();
   config.__configPath = absolute;
   config.__advertiseIp = config.network.advertiseIp === 'auto'

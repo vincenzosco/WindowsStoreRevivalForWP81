@@ -141,7 +141,19 @@ if (config.livestore.apiKey) {
 } else {
   item('OPTIONAL', 'API key not set - only needed for the real catalog',
     'create an app for the Live Store realm in the One Live Developer Centre,');
-  lines.push('        then put the key in config.json -> livestore.apiKey');
+  lines.push('        then set ZINC_API_KEY in the environment (preferred: config.json is');
+  lines.push('        tracked by git) or put it in config.json -> livestore.apiKey');
+}
+// Which catalog the system Store is answered with: the Live Store's own, or a
+// fixture. A page built from the fixture while the operator believed otherwise is
+// only readable from `x-lab-source` on the response, so it is said here too.
+if (config.livestore?.protocol?.source === 'zinc') {
+  item(config.livestore.apiKey ? 'DONE' : 'BLOCKED',
+    'the Store page is built from the Live Store catalog',
+    config.livestore.apiKey ? '' : 'no API key: the page falls back to livestore.protocol.catalogFile');
+} else {
+  item('OPTIONAL', 'the Store page is built from the catalog file, not the Live Store',
+    "set livestore.protocol.source=\"zinc\" to serve the real catalog");
 }
 const bridge = config.livestore.bridge || {};
 if (bridge.enabled) item('DONE', `catalog bridge enabled (source: ${bridge.source || 'fixture'}, path: ${bridge.pathPrefix || '/livestore/'})`);
@@ -239,7 +251,8 @@ if (!caInfo) steps.push('Start the lab so the CA is generated.');
 else if (!fs.existsSync(path.join(caDir, 'install-root-ca.reg'))) steps.push('Run `npm run make-rootreg`.');
 if (caInfo) steps.push('Import install-root-ca.reg into the phone registry with WPinternals, then reboot the phone.');
 if (!deviceClients.size) steps.push('Set the router DNS to this PC, then reconnect the phone to Wi-Fi so it picks up the new DNS.');
-if (!config.livestore.apiKey) steps.push('Optional: add the Zinc API key to serve the real Live Store catalog.');
+if (!config.livestore.apiKey) steps.push('Optional: set ZINC_API_KEY to serve the real Live Store catalog.');
+else if (config.livestore?.protocol?.source !== 'zinc') steps.push('Set livestore.protocol.source to "zinc" to serve the real Live Store catalog.');
 if (steps.length === 0) steps.push('Everything is in place: open the Store on the phone and run `npm run watch`.');
 
 steps.forEach((step, index) => lines.push(`  ${index + 1}. ${step}`));

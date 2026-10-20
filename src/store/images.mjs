@@ -40,6 +40,7 @@
 import zlib from 'node:zlib';
 
 import { isInterceptedHost } from '../config.mjs';
+import { imageSourceFor } from './catalog-feed.mjs';
 
 const SIZE = 48;
 // The field, and the mark. Both are constants so the bytes cannot drift with a
@@ -139,8 +140,70 @@ export function imageSettings(config) {
     // the query string, and a path filter would only decide which of its own
     // requests this lab answers - the failure it is here to remove.
     pathPrefix: '/',
+    // Whether a guid the catalog registered is answered with its own icon. Off
+    // leaves every response the marked placeholder, which is what every delivery
+    // before the Live Store catalog was drawn with.
+    icons: true,
     ...(config.livestore?.images || {}),
   };
+}
+
+// ------------------------------------------------------- the real picture
+//
+// A catalog entry can state where its own icon lives, and the Live Store's does
+// (`https://cdn.store.live.net.co/icons/<hash>.jpg` - the extension varies, which is
+// why the content type is copied from the answer instead of assumed). The document
+// cannot carry that
+// URL - the protocol names a picture by guid - so the page build registers
+// guid -> URL in catalog-feed.mjs and this handler reads it back. The bytes are
+// fetched here, by the lab, and handed to the phone from the host the phone already
+// trusts; the device is never pointed at a third party. When the entry states
+// nothing, or the fetch fails, the marked placeholder is served instead and the
+// response says which happened, so a screenshot can never be read as the wrong arm.
+const ICON_CACHE = new Map();
+const MAX_CACHED_ICONS = 256;
+const MAX_ICON_BYTES = 512 * 1024;
+const ICON_TIMEOUT_MS = 5000;
+const ICON_TTL_MS = 30 * 60 * 1000;
+
+let fetchIcon = (url, options) => globalThis.fetch(url, options);
+
+/**
+ * Replace the fetcher - the self-test's hook.
+ *
+ * The suite is offline and deterministic by design, so the live CDN is not something
+ * it may dial: the whole point of the checks around this is that they hold whether or
+ * not a third party is up.
+ */
+export function setImageFetch(fn) {
+  fetchIcon = fn || ((url, options) => globalThis.fetch(url, options));
+}
+
+/** A header value cannot carry a newline, and an error message can. */
+function headerSafe(value) {
+  return String(value).replace(/[^\x20-\x7e]/g, ' ').slice(0, 300);
+}
+
+async function loadIcon(url) {
+  const now = Date.now();
+  const cached = ICON_CACHE.get(url);
+  if (cached && cached.expires > now) return cached;
+
+  const response = await fetchIcon(url, {
+    signal: AbortSignal.timeout(ICON_TIMEOUT_MS),
+    headers: { 'user-agent': 'wp8-store-lab/0.1' },
+  });
+  if (!response.ok) throw new Error(`answered ${response.status}`);
+  const type = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (!type.startsWith('image/')) throw new Error(`answered ${type || 'no content type'}, not an image`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length) throw new Error('answered an empty body');
+  if (bytes.length > MAX_ICON_BYTES) throw new Error(`answered ${bytes.length} bytes, over the ${MAX_ICON_BYTES}-byte cap`);
+
+  const entry = { bytes, type, expires: now + ICON_TTL_MS };
+  if (ICON_CACHE.size >= MAX_CACHED_ICONS) ICON_CACHE.clear();
+  ICON_CACHE.set(url, entry);
+  return entry;
 }
 
 /** True when a pattern list matches the host, without pulling in the glob matcher's config shape. */
@@ -173,6 +236,9 @@ export function createStoreImages(config) {
   // device drew: only the screen says that.
   const stats = {
     served: 0,
+    servedIcons: 0,
+    iconFailures: 0,
+    lastIconError: null,
     refusedUnlisted: 0,
     refusedMethod: 0,
     byImagetype: {},
@@ -210,6 +276,9 @@ export function createStoreImages(config) {
         enabled: Boolean(settings.enabled),
         hosts: settings.hosts,
         served: stats.served,
+        servedIcons: stats.servedIcons,
+        iconFailures: stats.iconFailures,
+        lastIconError: stats.lastIconError,
         distinctGuids: stats.guids.size,
         refusedUnlisted: stats.refusedUnlisted,
         refusedMethod: stats.refusedMethod,
@@ -251,7 +320,7 @@ export function createStoreImages(config) {
 
       noteServed(ctx);
 
-      return {
+      const placeholder = (reason = null) => ({
         status: 200,
         headers: {
           'content-type': 'image/png',
@@ -264,9 +333,42 @@ export function createStoreImages(config) {
           // field it replaced, which is the difference between "the bitmap is drawn"
           // and "the slot is painted".
           'x-lab-image-shape': `${SIZE}x${SIZE} field+frame+X`,
+          ...(reason ? { 'x-lab-image-fallback': headerSafe(reason) } : {}),
         },
         body: PLACEHOLDER_PNG,
-      };
+      });
+
+      const settings = imageSettings(config);
+      const source = settings.icons === false ? null : imageSourceFor(guidOf(ctx.path));
+      if (source) {
+        try {
+          const icon = await loadIcon(source);
+          stats.servedIcons += 1;
+          return {
+            status: 200,
+            headers: {
+              'content-type': icon.type,
+              'content-length': String(icon.bytes.length),
+              'cache-control': 'no-store',
+              'x-lab-source': 'store-images',
+              // The app's own picture, fetched by the lab from where its catalog
+              // entry says it lives. Named so a capture can tell it apart from the
+              // placeholder without comparing pixels.
+              'x-lab-image': 'live-store',
+              'x-lab-image-origin': headerSafe(source),
+            },
+            body: icon.bytes,
+          };
+        } catch (err) {
+          // A broken icon is not a broken page: the entry is still drawable, so the
+          // marked placeholder is served and the failure is named on the response.
+          stats.iconFailures += 1;
+          stats.lastIconError = `${source}: ${err.message}`;
+          return placeholder(`live store ${err.message}`);
+        }
+      }
+
+      return placeholder(source === null && settings.icons === false ? 'icons disabled' : null);
     },
   };
 }

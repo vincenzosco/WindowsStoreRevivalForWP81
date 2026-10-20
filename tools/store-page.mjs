@@ -25,8 +25,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfig } from '../src/config.mjs';
-import { buildStorePageFeed, normalizePageFormat } from '../src/store/catalog-feed.mjs';
-import { pageSections } from '../src/store/protocol.mjs';
+import { buildStorePageFeed, normalizePageFormat, setImageSalt, setPageElementStyle } from '../src/store/catalog-feed.mjs';
+import { pageSections, resolveDataSourceType } from '../src/store/protocol.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -59,6 +59,42 @@ const apps = catalog.apps || [];
 const sections = pageSections(catalog, protocol.pageSize || 25);
 const typeId = new URL(PHONE_QUERY, 'http://x').searchParams.get('typeId') || 'DynamicHub.Main';
 const cc = new URL(PHONE_QUERY, 'http://x').searchParams.get('cc') || 'US';
+const lang = new URL(PHONE_QUERY, 'http://x').searchParams.get('lang') || 'en-US';
+
+// The pane's source, built exactly as the handler builds it (src/store/protocol.mjs):
+// same host the device reached the lab through, same scheme, same two markers the
+// device's own download would carry. This tool used to pass four options fewer than
+// the server does - no data source, no pane kind, no sub type, no background art -
+// so it printed a document the lab never serves, with panes that carried neither a
+// `<Type>` nor a `<DataSource>`. A diagnostic that answers a different question than
+// the one asked is worse than no diagnostic, which is why every option the handler
+// passes is passed here too.
+// The salt the handler applies per delivery, applied here for the same reason the
+// other options are: a tool that builds a slightly different document than the
+// server answers a question nobody asked. It changes every art guid in the page, so
+// leaving it out is not a cosmetic difference - it is the field an experiment on a
+// caching client turns on.
+setImageSalt(protocol.imageSalt || '');
+// The structural spelling the handler applies per delivery, applied here too - the
+// same reason as the salt, and the same failure if it is left out: a page printed
+// with `<Pane>` while the server answers `<StorePane>` is a diagnostic that describes
+// a document nobody is served.
+setPageElementStyle(protocol.pageElements || 'parser');
+const dataSourceType = protocol.dataSource ? resolveDataSourceType(protocol.dataSourceType) : null;
+const pageSize = protocol.pageSize || 25;
+const dataSource = dataSourceType ? {
+  type: dataSourceType.type,
+  maxItems: pageSize,
+  minItems: 1,
+  urlFor: (section) => {
+    const params = new URLSearchParams();
+    params.set('chunkSize', String(pageSize));
+    if (!section.uncategorised) params.set('category', String(section.title));
+    params.set('cc', cc);
+    params.set('lang', lang);
+    return `http://cdn.marketplaceedgeservice.windowsphone.com/v9/catalog/apps?${params.toString()}`;
+  },
+} : null;
 
 const xml = buildStorePageFeed({
   sections,
@@ -69,6 +105,12 @@ const xml = buildStorePageFeed({
   templateType: protocol.templateType || '003',
   typeKeyForm: protocol.templateTypeForm || 'both',
   pageFormat: normalizePageFormat(protocol.pageFormat),
+  dataSource,
+  paneType: protocol.paneType || '',
+  paneSubType: protocol.paneSubType || '',
+  paneBackgroundImage: Boolean(protocol.paneBackgroundImage),
+  offerMediaInstance: Boolean(protocol.offerMediaInstance),
+  panesInFeed: Boolean(protocol.panesInFeed),
 });
 
 fs.mkdirSync(path.dirname(outFile), { recursive: true });
@@ -86,6 +128,13 @@ const money = (app) => {
 };
 
 console.log(`catalog : ${catalogFile} - ${apps.length} app(s), ${(catalog.categories || []).length} categor(y/ies)`);
+// This tool reads the file, always: it has to work with the lab stopped and it must
+// not depend on a third party. When the lab itself is armed to build the page from
+// the Live Store, the file is only the fallback, and saying so keeps a rendered page
+// from being read as what the phone gets.
+if (String(protocol.source || 'file').toLowerCase() === 'zinc') {
+  console.log('          the lab is armed to build this page from the Live Store; this is the fallback catalog');
+}
 console.log(`page    : <${root}> root, template ${templateType}, pageFormat ${normalizePageFormat(protocol.pageFormat)}, ${xml.length} bytes`);
 // Where the items are, which is the whole difference between the two page-rooted
 // formats: inside the panes, or only in the feed underneath them.
@@ -93,6 +142,14 @@ const insidePanes = (xml.split('</Panes>')[0] || '').split('<editorialItem>').le
 const totalItems = xml.split('<editorialItem>').length - 1;
 console.log(`items   : ${totalItems} in the document, ${insidePanes} of them inside the panes`
   + (insidePanes ? '' : ' (the panes carry a reference, not the items)'));
+// What each pane says it is and where it points: the two fields every content
+// experiment of 2026-10-20 turned on, so the tool states them instead of leaving
+// the operator to grep the file.
+const paneTypes = [...xml.matchAll(/<(?:Store)?Pane>(?:<Id>[^<]*<\/Id>)?(?:<Title>[^<]*<\/Title>)?(?:<Type>([^<]*)<\/Type>)?/g)]
+  .map((match) => match[1] ?? '(none)');
+const sourceTypes = [...xml.matchAll(/<DataSource><Type>([^<]*)<\/Type>/g)].map((match) => match[1]);
+console.log(`panes   : type ${[...new Set(paneTypes)].join('/') || '(none)'}, `
+  + `source ${[...new Set(sourceTypes)].join('/') || '(none)'}`);
 console.log(`file    : ${path.relative(ROOT, outFile) || outFile}`);
 console.log(`query   : ${PHONE_QUERY}`);
 console.log('');

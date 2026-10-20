@@ -14,6 +14,7 @@ import { preflight, formatProblems } from './preflight.mjs';
 import { ZincClient } from './zinc.mjs';
 import { StoreRouter } from './store/router.mjs';
 import { buildHandlers } from './store/handlers.mjs';
+import { warmCatalog } from './store/protocol.mjs';
 
 function parseArgs(argv) {
   const args = { config: 'config.json', only: null };
@@ -131,6 +132,15 @@ async function main() {
     handlers: buildHandlers(config),
     logger: logger.child('store'),
   });
+
+  // Assembling the Live Store catalog is the one thing in this process that talks
+  // to a third party, and its first run costs seconds - sixteen categories, 203
+  // apps, measured at eleven seconds serially. The device holds its page request
+  // open while that happens, so it is done once here instead of inside the request
+  // the phone makes. Not awaited: the lab must come up whether or not Zinc does.
+  warmCatalog(config, { logger: logger.child('store'), zinc })
+    .then((result) => logger.info(`Store catalog for the page: ${result.source}`))
+    .catch((err) => logger.warn(`Store catalog warm-up failed: ${err.message}`));
 
   if (config.proxy.enabled && args.only !== 'dns') {
     const proxy = new MitmProxy({

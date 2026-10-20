@@ -69,6 +69,53 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const PANE_PATH = FEED_PATHS.find((entry) => entry.path === '/Panes/Pane').path.slice(1).split('/');
 const PANE_CONTAINER = PANE_PATH[0];
 const PANE_ELEMENT = PANE_PATH[1];
+
+/**
+ * Which spelling a page's structural elements are served with, and the two sources
+ * that disagree about it.
+ *
+ * `parser` is the default and the spelling every page in this project has carried: it
+ * comes from the path table of the parsing module (`/Panes/Pane`, `/Templates/Template`,
+ * read from the handset's own `ZMarketplace.dll` and asserted by 69 checks).
+ *
+ * `typetable` is the other one, from a different source and a different build: the type
+ * table of the retail FFU (F-041) reads `… StorePage Panes StorePaneListResult StorePane
+ * Templates StoreTemplate GetObjects …`, i.e. `StorePane` and `StoreTemplate` beside
+ * `StorePage`. The two cannot both be the element names a single reader walks, and the
+ * experiment that settles it is cheap and already built: a pane carrying
+ * `/BackgroundImage/id` is art the client must fetch *if* it walks the pane block at all.
+ * It did not, on 2026-10-20 - eight backgrounds, zero requests - which is why the other
+ * spelling is worth serving.
+ */
+let pageElementStyle = 'parser';
+
+/** Choose the page's structural element spelling; called once per delivery. */
+export function setPageElementStyle(style) {
+  pageElementStyle = String(style ?? '').trim().toLowerCase() === 'typetable' ? 'typetable' : 'parser';
+}
+
+function paneContainerName() {
+  return PAGE_ELEMENT_NAMES.panes;
+}
+
+function paneElementName() {
+  return PAGE_ELEMENT_NAMES.pane;
+}
+
+function templateNames() {
+  return PAGE_ELEMENT_NAMES.template;
+}
+
+/** The two spellings, resolved once so no branch can mix them in one document. */
+const PAGE_ELEMENT_NAMES = {
+  get panes() { return pageElementStyle === 'typetable' ? 'Panes' : PANE_CONTAINER; },
+  get pane() { return pageElementStyle === 'typetable' ? 'StorePane' : PANE_ELEMENT; },
+  get template() {
+    return pageElementStyle === 'typetable'
+      ? { container: 'Templates', element: 'StoreTemplate' }
+      : { container: TEMPLATE_GRAMMAR.container, element: TEMPLATE_GRAMMAR.element };
+  },
+};
 const CONTENT_LINK_TYPE = 'ApplicationCollection';
 
 /**
@@ -181,9 +228,59 @@ export function uuidForApp(catalogId) {
   return uuid5(`app:${catalogId}`);
 }
 
+/**
+ * The salt every *image* guid is derived with, and why it exists.
+ *
+ * The device caches an image by the guid it was asked for, and it does not ask
+ * again: the 17 guids this lab has minted since 2026-10-15 were first requested on
+ * 2026-10-17 when the lab was still answering the CDN with `502`, so what the
+ * handset holds under them is a failure, not a picture - and no later delivery of a
+ * real bitmap can change what it draws, because no request is made. A salt changes
+ * the guids, which is the only way to ask a caching client a question it has not
+ * already answered. It affects the art only: app guids are the client's own way of
+ * naming an application back to this lab (`/v9/catalog/apps/<guid>`) and must not
+ * move, and neither must a collection's.
+ */
+let imageSalt = '';
+
+/** Set (or clear) the image-guid salt; called once per delivery from the protocol. */
+export function setImageSalt(value) {
+  const next = String(value ?? '').trim();
+  // A different salt is a different set of guids, so what was registered under the
+  // old ones describes pictures this process will never be asked for again.
+  if (next !== imageSalt) imageSources.clear();
+  imageSalt = next;
+}
+
+// ------------------------------------------------------- guid -> real picture
+
+// The client names a picture by guid and by nothing else: `/v8/images/<guid>
+// ?imagetype=icon_small` carries no app id and no URL. So the guids minted while a
+// document is built are the only place the mapping back to a catalog entry can be
+// kept, and it is kept here - written by the builder, read by the image endpoint in
+// the same process, one document ahead of the requests it causes.
+const imageSources = new Map();
+const MAX_IMAGE_SOURCES = 8192;
+
+/** The URL a minted image guid stands for, or null when the catalog entry named none. */
+export function imageSourceFor(guid) {
+  return imageSources.get(String(guid || '').trim().toLowerCase()) || null;
+}
+
+function rememberImageSource(guid, url) {
+  const key = String(guid || '').trim().toLowerCase();
+  if (!key || !url) return;
+  if (!imageSources.has(key) && imageSources.size >= MAX_IMAGE_SOURCES) return;
+  imageSources.set(key, String(url));
+}
+
+function imageName(name) {
+  return imageSalt ? `${name}@${imageSalt}` : name;
+}
+
 /** The GUID an application's primary image is served under. */
 export function uuidForImage(catalogId) {
-  return uuid5(`image:${catalogId}`);
+  return uuid5(imageName(`image:${catalogId}`));
 }
 
 /**
@@ -193,7 +290,7 @@ export function uuidForImage(catalogId) {
  * value. Sharing it would make it request the icon where it meant the background.
  */
 export function uuidForBackground(catalogId) {
-  return uuid5(`background:${catalogId}`);
+  return uuid5(imageName(`background:${catalogId}`));
 }
 
 /** The GUID a page's section (its collection of items) is served under. */
@@ -203,7 +300,7 @@ export function uuidForCollection(name) {
 
 /** The GUID one display item inside a section is served under. */
 export function uuidForEditorial(catalogId) {
-  return uuid5(`editorial:${catalogId}`);
+  return uuid5(imageName(`editorial:${catalogId}`));
 }
 
 /** True for a string shaped like a GUID. */
@@ -347,8 +444,20 @@ function publisherXml(app) {
   return `<publisher><id>${text(name)}</id><name>${text(name)}</name></publisher>`;
 }
 
+/**
+ * The entry's picture.
+ *
+ * The document carries a guid and not a URL - that is the protocol - so an entry
+ * that states where its icon lives (`app.icon`, which the Live Store catalog does)
+ * has that URL remembered against the guid it is about to be served under. An entry
+ * that states nothing registers nothing, and the image endpoint falls back to the
+ * marked placeholder, which is what every earlier delivery drew.
+ */
 function imageXml(app) {
-  return `<image><id>urn:uuid:${uuidForImage(app.id)}</id></image>`;
+  const guid = uuidForImage(app.id);
+  const icon = typeof app.icon === 'string' ? app.icon.trim() : '';
+  if (icon) rememberImageSource(guid, icon);
+  return `<image><id>urn:uuid:${guid}</id></image>`;
 }
 
 /**
@@ -502,16 +611,22 @@ function applicationsXml(items, now, options = {}) {
  */
 function panesXml({
   sections, withItems = false, now, dataSource = null, paneType = '', paneSubType = '',
-  backgroundImage = false, offerMediaInstance = false,
+  paneTypeFeatured = '', backgroundImage = false, offerMediaInstance = false,
 }) {
   const panes = sections.map((section, index) => {
     const collection = uuidForCollection(section.title || `section-${index + 1}`);
     const items = section.items || [];
     const title = text(section.title || 'List Of Items');
-    return `<${PANE_ELEMENT}>`
+    // The first pane carries its own kind when one is configured for it. The hub
+    // this phone draws is made of two item kinds - `Store_HubCollectionUI_*` and
+    // `Store_HubFeaturedItemUI_*` in its own UI assets - and every page served so
+    // far carried one kind for all eight panes, which is a shape that vocabulary
+    // never names. Everything else about the pane is untouched.
+    const kind = index === 0 && paneTypeFeatured ? paneTypeFeatured : paneType;
+    return `<${paneElementName()}>`
       + `<Id>${collection}</Id>`
       + `<Title>${title}</Title>`
-      + paneKindXml(paneType, paneSubType)
+      + paneKindXml(kind, paneSubType)
       + paneBackgroundXml(section, backgroundImage)
       + `<index>${index + 1}</index>`
       + `<title>${title}</title>`
@@ -521,9 +636,9 @@ function panesXml({
       + (withItems
         ? editorialItemsXml(items) + applicationsXml(items, now, { mediaInstance: offerMediaInstance })
         : '')
-      + `</${PANE_ELEMENT}>`;
+      + `</${paneElementName()}>`;
   }).join('');
-  return `<${PANE_CONTAINER}>${panes}</${PANE_CONTAINER}>`;
+  return `<${paneContainerName()}>${panes}</${paneContainerName()}>`;
 }
 
 /**
@@ -609,21 +724,23 @@ function dataSourceXml(section, dataSource) {
 function templateBlockXml({ templateName, templateType, typeKeyForm = 'both' }) {
   if (!templateName && !templateType) return '';
   const key = TEMPLATE_GRAMMAR.typeKey;
+  const names = templateNames();
   const asAttribute = templateType && (typeKeyForm === 'attribute' || typeKeyForm === 'both');
   const asElement = templateType && (typeKeyForm === 'element' || typeKeyForm === 'both');
-  return `<${TEMPLATE_GRAMMAR.container}><${TEMPLATE_GRAMMAR.element}`
+  return `<${names.container}><${names.element}`
     + (asAttribute ? ` ${key}="${text(templateType)}"` : '')
     + '>'
     + '<mimeType>application/uix</mimeType>'
     + (templateName ? `<templateName>${text(templateName)}</templateName>` : '')
     + (asElement ? `<${key}>${text(templateType)}</${key}>` : '')
-    + `</${TEMPLATE_GRAMMAR.element}></${TEMPLATE_GRAMMAR.container}>`;
+    + `</${names.element}></${names.container}>`;
 }
 
 function feedHeader({
   selfHref, updated, title, id, impression, sections, templateName, templateType, typeKeyForm,
   blocks = true, dataSource = null, paneType = '', paneSubType = '',
-  withItems = false, paneBackgroundImage = false, offerMediaInstance = false, now,
+  paneTypeFeatured = '', withItems = false, paneBackgroundImage = false,
+  offerMediaInstance = false, now,
 }) {
   return '<?xml version="1.0" encoding="utf-8"?>'
     + `<a:feed xmlns:a="${ATOM_NS}" xmlns:os="${OPEN_SEARCH_NS}" xmlns="${CATALOG_NS}">`
@@ -640,7 +757,7 @@ function feedHeader({
     // absolute path (see `panesInFeed` in config.json).
     + (blocks && sections
       ? panesXml({
-        sections, dataSource, paneType, paneSubType, withItems,
+        sections, dataSource, paneType, paneSubType, paneTypeFeatured, withItems,
         backgroundImage: paneBackgroundImage, offerMediaInstance, now,
       })
       : '')
@@ -660,14 +777,18 @@ export const PAGE_FORMATS = ['storePage', 'panes', 'atom'];
 /**
  * The format a value names, or the default when it names nothing this builder
  * knows. A typo in config must not silently become a document nobody asked for,
- * so anything unrecognised reads as the default the lab served before.
+ * so anything unrecognised reads as the default.
+ *
+ * The default is `atom` since 2026-10-20 17:58 local: that is the document the
+ * handset actually drew (F-065), and a typo in config must fall back to the shape
+ * that works, not to the one that was blank for fourteen deliveries.
  *
  * @param {unknown} value
  * @returns {'storePage'|'panes'|'atom'}
  */
 export function normalizePageFormat(value) {
   const wanted = String(value ?? '').trim();
-  return PAGE_FORMATS.includes(wanted) ? wanted : 'storePage';
+  return PAGE_FORMATS.includes(wanted) ? wanted : 'atom';
 }
 
 /**
@@ -698,8 +819,9 @@ export function normalizePageFormat(value) {
 export function buildStorePageFeed({
   sections = [], selfHref = '/', id = 'storePage', title = 'List Of Items',
   templateName, templateType, typeKeyForm, pageFormat, dataSource = null,
-  paneType = '', paneSubType = '', paneBackgroundImage = false, offerMediaInstance = false,
-  panesInFeed = false, now = new Date(),
+  paneType = '', paneSubType = '', paneTypeFeatured = '',
+  paneBackgroundImage = false, offerMediaInstance = false,
+  panesInFeed = false, withoutPanes = false, now = new Date(),
 } = {}) {
   const format = normalizePageFormat(pageFormat);
   const stamp = feedStamp(now);
@@ -742,12 +864,20 @@ export function buildStorePageFeed({
   // feed, which is where a parser that selects the feed first and walks the pane
   // path from there would find them. One document, one position, nothing else.
   const panesOnTheFeed = wantsPageRoot && panesInFeed;
+  // `withoutPanes` used to be honoured only by the page-root branch below, so on the
+  // `atom` document - the one the handset accepts (F-065) - it did nothing at all: the
+  // flag was set, the bytes were identical, and the panes still travelled inside the
+  // feed. That is the arm the archive asks for (root `<a:feed>`, **no** `<Panes>`, the
+  // section's `<a:entry>` carrying its own items), so it has to reach this header too.
+  // `sections: null` drops the pane block and keeps the template block, which is what
+  // the archive carries - the two are separate decisions in `feedHeader` for exactly
+  // this reason.
   const header = feedHeader({
     selfHref, updated: stamp, title, id, impression,
-    sections: wantsPageRoot && !panesOnTheFeed ? null : sections,
+    sections: withoutPanes ? null : (wantsPageRoot && !panesOnTheFeed ? null : sections),
     templateName, templateType, typeKeyForm,
     blocks: !wantsPageRoot || panesOnTheFeed,
-    dataSource, paneType, paneSubType,
+    dataSource, paneType, paneSubType, paneTypeFeatured,
     withItems: format === 'panes',
     paneBackgroundImage, offerMediaInstance, now,
   });
@@ -760,13 +890,16 @@ export function buildStorePageFeed({
   const withoutDeclaration = feed.replace(/^<\?xml[^?]*\?>/, '');
   return '<?xml version="1.0" encoding="utf-8"?>'
     + `<${STORE_PAGE_ROOT} xmlns:a="${ATOM_NS}" xmlns:os="${OPEN_SEARCH_NS}" xmlns="${CATALOG_NS}">`
-    + (panesOnTheFeed
+    // The pane block and the template block are separate decisions: `withoutPanes`
+    // removes the panes and keeps the layout, which is the whole point of the arm -
+    // a page the client can style but whose items hang off the feed entries alone.
+    + (panesOnTheFeed || withoutPanes
       ? ''
       : panesXml({
         sections, withItems: format === 'panes', now, dataSource, paneType, paneSubType,
-        backgroundImage: paneBackgroundImage, offerMediaInstance,
-      })
-        + templateBlockXml({ templateName, templateType, typeKeyForm }))
+        paneTypeFeatured, backgroundImage: paneBackgroundImage, offerMediaInstance,
+      }))
+    + (panesOnTheFeed ? '' : templateBlockXml({ templateName, templateType, typeKeyForm }))
     + withoutDeclaration
     + `</${STORE_PAGE_ROOT}>`;
 }
@@ -952,4 +1085,46 @@ export function buildApplicationListFeed({
   }) + apps.map((app, index) => applicationEntryXml(app, now, impression, {
     rank: rankFor(index), entryTitle, mediaInstance,
   })).join('') + feedFooter();
+}
+
+/**
+ * An empty suggestion feed - the answer `/v8/catalog/queries` never had.
+ *
+ * That route was passthrough until 2026-10-20 evening, which on this network means
+ * `502 upstream_loop`: the name is hijacked, no handler matches, the relay resolves
+ * it back to this process and refuses to forward. It was left that way on the
+ * reading that the suggestion download is asked only while a human types in the
+ * search box (F-040), and the capture contradicts it twice: the handset asked it
+ * **four times in one second** at 14:47:22Z, with `prefix=f`, while nobody was
+ * touching it, in the same second as the application list and before the page's
+ * art. A `502` inside that window is an injected failure and the register's own
+ * rule (F-051) is to remove it before reading anything else.
+ *
+ * What it answers is the emptiest true thing and no more: a well-formed Atom feed
+ * with the catalog namespace, the feed's own `rel="self"`, `a:updated`, `a:title`
+ * and `a:id`, and **no entries**. No capture of this endpoint exists anywhere (F-040
+ * measured the request and the feed-type name `ApplicationSuggestions`, not a
+ * reply), so nothing here is reconstructed: the framing is the one every feed in
+ * this file already uses, and the response carries `x-lab-invented: 1` so a later
+ * reader of a capture cannot mistake the emptiness for archived ground truth.
+ * "No suggestions" is also the true answer to a prefix with nothing behind it.
+ *
+ * @param {object} options
+ * @param {string} [options.selfHref] the request path, for `rel="self"`
+ * @param {string} [options.prefix] the prefix the device asked about
+ * @param {Date} [options.now]
+ * @returns {string} XML
+ */
+export function buildSuggestionsFeed({ selfHref = '/', prefix = '', now = new Date() } = {}) {
+  const stamp = feedStamp(now);
+  const wanted = sanitizeText(prefix);
+  return feedHeader({
+    selfHref,
+    updated: stamp,
+    title: wanted ? `${wanted}-suggestions` : 'suggestions',
+    id: `urn:uuid:${uuid5(`suggestions:${wanted}`)}`,
+    impression: null,
+    templateName: null,
+    blocks: false,
+  }) + feedFooter();
 }

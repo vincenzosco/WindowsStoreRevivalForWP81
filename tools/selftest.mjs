@@ -34,8 +34,10 @@ import { ZincClient } from '../src/zinc.mjs';
 import { describeDirectHandshakeFailure } from '../src/proxy.mjs';
 import { StoreRouter } from '../src/store/router.mjs';
 import { buildHandlers } from '../src/store/handlers.mjs';
-import { buildStorePageFeed, buildApplicationListFeed, buildProductUpdatesResponse, uuidForApp, uuidForCollection, categoryId, normalizeVersion, findAppByUuid, isUuid, normalizePageFormat, ATOM_NS, CATALOG_NS } from '../src/store/catalog-feed.mjs';
-import { pageSections, applyPageMutation, resolveDataSourceType } from '../src/store/protocol.mjs';
+import { buildStorePageFeed, buildApplicationListFeed, buildProductUpdatesResponse, uuidForApp, uuidForImage, uuidForCollection, categoryId, normalizeVersion, findAppByUuid, isUuid, normalizePageFormat, setImageSalt, setPageElementStyle, ATOM_NS, CATALOG_NS } from '../src/store/catalog-feed.mjs';
+import { pageSections, applyPageMutation, resolveDataSourceType, searchRank } from '../src/store/protocol.mjs';
+import { mapZincApp, zincCatalog } from '../src/store/catalog-source.mjs';
+import { setImageFetch } from '../src/store/images.mjs';
 import { collect, coverage, findFirst, pathsUnder, verdictOf } from '../src/store/page-frame.mjs';
 import {
   DEFAULT_TEMPLATE_TYPE, TEMPLATE_GRAMMAR, TEMPLATE_TYPES, PAGE_TYPES, PAGE_PARSE_PATHS,
@@ -348,6 +350,10 @@ async function main() {
         // empty, deliberately: no reading suggests a value, and two invented fields
         // would be two variables.
         paneType: 'Collection',
+        // The first pane's own kind: empty here because the arm was read and withdrawn
+        // (F-054/F-055). The live lab serves what config.json says; this block only has
+        // to describe a page the checks below can recognise.
+        paneTypeFeatured: '',
         // The application list's entry shape, armed here as well as in config.json
         // for the same reason: the suite has to check the XML the lab serves. Both
         // values come from the archived responses of the real service - see
@@ -535,6 +541,14 @@ async function main() {
   const fixtureApps = fixtureCatalog.apps;
   const sections = pageSections(fixtureCatalog, 25);
 
+  // `pageFormat` is passed explicitly, and that is the fix for a check that failed the
+  // day the default moved: every assertion below the builder's *`storePage` document* -
+  // the parser's grammar, its root, its namespaces, where the panes sit - and those
+  // assertions are about that document, not about whatever a config omitted. Leaving the
+  // format implicit made the whole vocabulary block test the default, which is a
+  // different question and now has its own check below (`the default is the document the
+  // device draws`). Nothing here was loosened: the store-page document must still carry
+  // every path the parser walks and still be rooted at `<StorePage>`.
   const homeXml = buildStorePageFeed({
     sections,
     selfHref: '/v9/catalog/storePages?typeId=DynamicHub.Main&cc=IT',
@@ -543,6 +557,7 @@ async function main() {
     templateName: 'DynamicHub',
     templateType: DEFAULT_TEMPLATE_TYPE,
     typeKeyForm: 'both',
+    pageFormat: 'storePage',
   });
 
   check('store protocol: the home page feed is well-formed',
@@ -571,6 +586,52 @@ async function main() {
       && typedPanes.split('<SubType>FeaturedApps</SubType>').length - 1 === sections.length
       && xmlProblem(typedPanes) === null,
     `${sections.length} pane(s): untyped by default, all typed when configured`);
+
+  // The hub's own vocabulary, from the phone's UI assets: `Store_HubCollectionUI_*`
+  // and `Store_HubFeaturedItemUI_*`. Every page this lab served carried one kind for
+  // all eight panes, a shape those names never describe. The flag changes the FIRST
+  // pane and nothing else - same sections, same order, same data sources - and an
+  // empty value keeps the earlier document byte for byte.
+  const featuredPanes = buildStorePageFeed({
+    sections,
+    selfHref: '/v9/catalog/storePages?typeId=DynamicHub.Main&cc=IT',
+    templateName: 'DynamicHub',
+    templateType: DEFAULT_TEMPLATE_TYPE,
+    pageFormat: 'panes',
+    paneType: 'Collection',
+    paneTypeFeatured: 'FeaturedItem',
+  });
+  // The page without panes: the archived response's arrangement, which no delivery of
+  // ours has ever had. Subtractive only - the root, the template block and the feed are
+  // the same document, byte for byte, with the pane block removed.
+  const noPanesBase = {
+    sections,
+    selfHref: '/v9/catalog/storePages?typeId=DynamicHub.Main&cc=IT',
+    templateName: 'DynamicHub',
+    templateType: DEFAULT_TEMPLATE_TYPE,
+    pageFormat: 'storePage',
+    paneType: 'col',
+  };
+  const withPanesPage = buildStorePageFeed(noPanesBase);
+  const noPanes = buildStorePageFeed({ ...noPanesBase, withoutPanes: true });
+  check('store protocol: the no-panes page drops the pane block and keeps everything else',
+    noPanes.split('<Pane').length - 1 === 0
+      && noPanes.split('<Panes>').length - 1 === 0
+      && withPanesPage.split('<Pane>').length - 1 === sections.length
+      && noPanes.split('<Templates>').length - 1 === 1
+      && noPanes.split('<a:entry>').length - 1 === sections.length
+      && noPanes.split('<application>').length - 1 === withPanesPage.split('<application>').length - 1
+      && noPanes.replace(/<Panes>[\s\S]*?<\/Panes>/, '') === withPanesPage.replace(/<Panes>[\s\S]*?<\/Panes>/, '')
+      && xmlProblem(noPanes) === null,
+    `${noPanes.split('<a:entry>').length - 1} entries, 0 panes, ${noPanes.split('<application>').length - 1} applications`);
+
+  check('store protocol: the featured pane is the first one, and only the first',
+    featuredPanes.split('<Type>FeaturedItem</Type>').length - 1 === 1
+      && featuredPanes.indexOf('<Type>FeaturedItem</Type>') < featuredPanes.indexOf('<Type>Collection</Type>')
+      && featuredPanes.split('<Type>Collection</Type>').length - 1 === sections.length - 1
+      && typedPanes.split('FeaturedItem').length - 1 === 0
+      && xmlProblem(featuredPanes) === null,
+    `1 featured + ${sections.length - 1} collection, none when unarmed`);
 
   // The application list's entry shape, against the archived responses of the real
   // service. Both archived generations of `/v8/catalog/apps` and `/v9/catalog/apps`
@@ -730,6 +791,32 @@ async function main() {
       && /<a:feed[\s\S]*<Panes>/.test(atomPage)
       && !atomPage.includes('<StorePage>'),
     'the switch is one setting, so the change is one variable');
+  // The default, asked as its own question: a builder call that names no format must
+  // produce the document the handset actually drew on 2026-10-20 17:58 (F-065) - the
+  // `<a:feed>` root - because that is what a config which forgets the key, or spells it
+  // wrong, has to get. `storePage` and `panes` stay reachable by name.
+  const defaultPage = buildStorePageFeed({
+    sections, templateName: 'DynamicHub', templateType: '003',
+  });
+  check('vocabulary: the default is the document the device draws, not the one it rejected',
+    /^<\?xml[^?]*\?><a:feed/.test(defaultPage)
+      && !defaultPage.includes('<StorePage>')
+      && defaultPage.includes('<Panes>'),
+    defaultPage.slice(0, 60));
+  // `withoutPanes` on the default (atom) document: this is the arrangement the archived
+  // 2013 response actually has - no `<Panes>`, the section's `<a:entry>` at the root
+  // carrying its own items - and until now the flag was silently ignored whenever the
+  // document was an `<a:feed>`, which is exactly the document the device accepts (F-065).
+  // The arm is only readable if the flag changes the bytes it says it changes.
+  const atomNoPanes = buildStorePageFeed({
+    sections, templateName: 'DynamicHub', templateType: '003', withoutPanes: true,
+  });
+  check('vocabulary: withoutPanes removes the panes from the atom document too, and keeps the layout',
+    /^<\?xml[^?]*\?><a:feed/.test(atomNoPanes)
+      && !atomNoPanes.includes('<Pane>')
+      && atomNoPanes.includes('<Templates>')
+      && atomNoPanes.includes('<a:entry>'),
+    `panes=${(atomNoPanes.match(/<Pane>/g) || []).length} entries=${(atomNoPanes.match(/<a:entry>/g) || []).length}`);
   // The negative control, without which the check above is only a claim that it
   // passes: the same walk over a document that is not this grammar has to find
   // paths missing. A matcher that says yes to everything would pass the positive
@@ -950,12 +1037,17 @@ async function main() {
         && times(feedHalf, `<target>${collection}</target>`) === 1;
     }),
     'the pane\'s target is the entry\'s id, so the two views of a section cannot drift');
-  check('pageFormat: an unknown value reads as the store page, not as a document nobody asked for',
+  // The fallback is `atom` because that is the document the handset drew (F-065), and
+  // a typo must not fall back to the root that was blank for fourteen deliveries. The
+  // two older values stay reachable by name, so the arms the register measured are still
+  // armable - they are just no longer what an unrecognised value means.
+  check('pageFormat: an unknown value reads as the axis feed the device draws, not as a document nobody asked for',
     normalizePageFormat('panes') === 'panes'
       && normalizePageFormat('atom') === 'atom'
-      && normalizePageFormat('') === 'storePage'
-      && normalizePageFormat('Panes') === 'storePage'
-      && normalizePageFormat(undefined) === 'storePage',
+      && normalizePageFormat('storePage') === 'storePage'
+      && normalizePageFormat('') === 'atom'
+      && normalizePageFormat('Panes') === 'atom'
+      && normalizePageFormat(undefined) === 'atom',
     `${normalizePageFormat('panes')} / ${normalizePageFormat('nonsense')}`);
   check('pageFormat storePage: the default document is unchanged, its panes still empty',
     !demoXml.split('</Panes>')[0].includes('<editorialItem>')
@@ -1103,6 +1195,75 @@ async function main() {
       { config, logger, zinc: null },
     ))?.body.equals(png),
     'one placeholder, not a per-guid invention');
+
+  // The app's own icon. The document cannot carry a URL - the protocol names a
+  // picture by guid and by nothing else - so the build registers guid -> URL and the
+  // image endpoint reads it back: the bytes are fetched by the lab and handed out
+  // from the host the phone already trusts, never by pointing the device at a third
+  // party. The fetcher is faked here: these checks must hold whether or not a CDN
+  // answers, and the suite dials nothing.
+  const iconUrl = 'https://cdn.example.invalid/icons/probe.png';
+  let iconFetches = 0;
+  setImageFetch(async (url) => {
+    iconFetches += 1;
+    if (String(url) !== iconUrl) throw new Error(`unexpected fetch of ${url}`);
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'image/png' }),
+      arrayBuffer: async () => png,
+    };
+  });
+  const iconApp = { id: 'icon-probe', name: 'Icon Probe', category: 'social', icon: iconUrl };
+  buildApplicationListFeed({
+    apps: [iconApp], selfHref: '/v9/catalog/apps', id: 'tag:catalog.zune.net,2026-10-20:/apps', now: new Date('2026-10-20T00:00:00Z'),
+  });
+  const iconGuid = uuidForImage('icon-probe');
+  const iconServed = await probeRouter.handle(
+    { ...probeCtx, host: 'cdn.marketplaceimages.windowsphone.com', path: `/v8/images/${iconGuid}?imagetype=icon_small` },
+    { config, logger, zinc: null },
+  );
+  check('images: a guid the catalog registered answers with its own icon',
+    iconServed?.status === 200
+      && iconServed.body.equals(png)
+      && iconServed.headers['x-lab-image'] === 'live-store'
+      && iconServed.headers['x-lab-image-origin'] === iconUrl
+      && iconFetches === 1,
+    `status=${iconServed?.status} image=${iconServed?.headers['x-lab-image']} fetches=${iconFetches}`);
+
+  // A broken icon is not a broken page: the entry is still drawable, so the marked
+  // placeholder is served and the response says why it had to be. A *second* app is
+  // used on purpose - the first one's URL is cached by the successful fetch above,
+  // and a cache hit is not a fetch, so reusing it here would test the cache instead.
+  const brokenUrl = 'https://cdn.example.invalid/icons/broken.png';
+  buildApplicationListFeed({
+    apps: [{ id: 'icon-probe-2', name: 'Icon Probe Two', category: 'social', icon: brokenUrl }],
+    selfHref: '/v9/catalog/apps', id: 'tag:catalog.zune.net,2026-10-20:/apps', now: new Date('2026-10-20T00:00:00Z'),
+  });
+  const brokenGuid = uuidForImage('icon-probe-2');
+  setImageFetch(async () => { throw new Error('answered 503'); });
+  const iconBroken = await probeRouter.handle(
+    { ...probeCtx, host: 'cdn.marketplaceimages.windowsphone.com', path: `/v8/images/${brokenGuid}?imagetype=icon_small` },
+    { config, logger, zinc: null },
+  );
+  check('images: an icon that fails to fetch falls back to the placeholder and names why',
+    iconBroken?.status === 200 && iconBroken.body.equals(png)
+      && iconBroken.headers['x-lab-image'] === 'placeholder'
+      && String(iconBroken.headers['x-lab-image-fallback']).includes('answered 503'),
+    `image=${iconBroken?.headers['x-lab-image']} fallback=${iconBroken?.headers['x-lab-image-fallback']}`);
+
+  // And a guid no build ever registered is never fetched: the only URLs this lab
+  // will dial are the ones its own catalog stated, so a request cannot become one.
+  iconFetches = 0;
+  setImageFetch(async () => { iconFetches += 1; throw new Error('should not be called'); });
+  const unregistered = await probeRouter.handle(
+    { ...probeCtx, host: 'cdn.marketplaceimages.windowsphone.com', path: '/v8/images/deadbeef-0000-4000-8000-000000000000?imagetype=icon_small' },
+    { config, logger, zinc: null },
+  );
+  setImageFetch(null);
+  check('images: a guid no build registered is never fetched',
+    unregistered?.status === 200 && unregistered.headers['x-lab-image'] === 'placeholder' && iconFetches === 0,
+    `fetches=${iconFetches} image=${unregistered?.headers['x-lab-image']}`);
 
   // The counters behind `GET /__lab/images`. They exist because the only other way to
   // know how many icons this lab served was to read a capture file, and a count that
@@ -1314,6 +1475,111 @@ async function main() {
   check('store protocol: every pane the demo page names answers with that section',
     paneUrls.length === demoSections.length && filled.length > 0 && filled.every(Boolean),
     `${filled.filter(Boolean).length}/${paneUrls.length} source(s) answered for ${demoSections.length} section(s)`);
+
+  // --- the catalog the Store is served from -------------------------------
+  // The Store this phone opens is the system one, so its catalog is the Live
+  // Store's, not a fake one. Zinc cannot list - it names its categories and
+  // refuses a query shorter than five characters - so the catalog is assembled
+  // from per-category searches. The client is faked here on purpose: the checks
+  // are about the assembly, the fallback and what the headers say, and none of
+  // them may depend on the live service being up. Whether Zinc itself answers is
+  // tools/doctor.mjs's question, not this suite's.
+  const mapped = mapZincApp({
+    id: 859, name: 'Contatti Live', description: 'Rubrica', developer: 'One Live',
+    version: '2.1.0.0', release_date: '2014-03-01', url: 'https://example.invalid/859',
+  }, 'People');
+  check('store catalog: a Live Store app is mapped into the entry the builders read',
+    mapped?.id === '859' && mapped.name === 'Contatti Live' && mapped.publisher === 'One Live'
+      && mapped.category === 'people' && mapped.version === '2.1.0.0'
+      && mapped.price === 0 && mapped.displayPrice === 'Gratis' && mapped.hasLiveTile === true
+      && mapZincApp({ name: 'no id' }) === null,
+    `id=${mapped?.id} category=${mapped?.category} price=${mapped?.price}`);
+
+  // The union is the catalog: one app reached through four queries counts once.
+  const unitAsked = [];
+  const unitClient = {
+    async appCategories() { return ['people', 'apps']; },
+    async searchApps({ q, category }) {
+      unitAsked.push(`${category}/${q}`);
+      return { apps: [{ id: 1, name: 'One' }, { id: 2, name: 'Two' }] };
+    },
+  };
+  const assembled = await zincCatalog({ client: unitClient, terms: ['store', 'app', 'windows'], perCategory: 3 });
+  check('store catalog: the catalog is the union of every category, deduped by id',
+    assembled.apps.length === 2 && assembled.categories.length === 2
+      && unitAsked.length === 4
+      && unitAsked.every((call) => call.split('/')[1].length >= 5),
+    `${assembled.apps.length} app(s) from ${unitAsked.length} search(es): ${unitAsked.join(' ')}`);
+
+  const zincApps = [
+    { id: 859, name: 'Contatti Live', developer: 'One Live', version: '2.1.0.0' },
+    { id: 860, name: 'Meteo Live', developer: 'One Live', version: '1.4.0.0' },
+    { id: 861, name: 'Note Live', developer: 'One Live', version: '3.0.0.0' },
+  ];
+  // Each arm below gets its own cache key - the assembled catalog is cached like
+  // any other - so an arm can never be read through the previous arm's answer.
+  const armedZinc = (overrides) => {
+    config.livestore.protocol.source = 'zinc';
+    config.livestore.protocol.zinc = { terms: ['store'], perCategory: 25, maxCategories: 0, cacheTtlMs: 60000, ...overrides };
+  };
+  const homeWith = (zinc, path = '/v9/catalog/storePages?typeId=DynamicHub.Main&cc=IT&lang=it-IT') => probeRouter.handle(
+    { ...probeCtx, path },
+    { config, logger, zinc },
+  );
+  const saySource = (response) => String(response?.headers?.['x-lab-source'] || '');
+
+  armedZinc({ perCategory: 2 });
+  const livePage = await homeWith({
+    configured: true,
+    async appCategories() { return ['people', 'apps']; },
+    async searchApps({ category }) {
+      return { apps: category === 'people' ? zincApps.slice(0, 2) : zincApps.slice(2) };
+    },
+  });
+  const liveIds = zincApps.map((app) => `urn:uuid:${uuidForApp(String(app.id))}`);
+  check('store catalog: with the Live Store armed the page is built from it, and says so',
+    livePage?.status === 200
+      && saySource(livePage) === 'zinc:live store (3 apps)'
+      && livePage.headers['x-lab-sections'] === '2'
+      && liveIds.every((id) => String(livePage.body).includes(id)),
+    `status=${livePage?.status} source=${saySource(livePage)} sections=${livePage?.headers['x-lab-sections']}`);
+
+  const liveList = await homeWith({
+    configured: true,
+    async appCategories() { return ['people', 'apps']; },
+    async searchApps({ category }) {
+      return { apps: category === 'people' ? zincApps.slice(0, 2) : zincApps.slice(2) };
+    },
+  }, '/v9/catalog/apps?chunkSize=50');
+  check('store catalog: the application list is the Live Store catalog too',
+    liveList?.status === 200 && liveList.headers['x-lab-apps'] === '3'
+      && saySource(liveList) === 'zinc:live store (3 apps)',
+    `apps=${liveList?.headers['x-lab-apps']} source=${saySource(liveList)}`);
+
+  // A Store that goes mute because a third party is down is worse than one
+  // serving the lab's own catalog - and the header has to say which of the two
+  // answered, because that is what a capture is read against.
+  armedZinc({ perCategory: 3 });
+  const failedZinc = await homeWith({
+    configured: true,
+    async appCategories() { return ['people']; },
+    async searchApps() { throw new Error('Zinc /apps/search answered 503: upstream unavailable'); },
+  });
+  const failedSource = saySource(failedZinc);
+  check('store catalog: a Live Store failure serves the catalog file and names the failure',
+    failedZinc?.status === 200
+      && failedSource.startsWith(config.livestore.protocol.catalogFile)
+      && failedSource.includes('(zinc: Zinc /apps/search answered 503: upstream unavailable)'),
+    `status=${failedZinc?.status} source=${failedSource}`);
+
+  armedZinc({ perCategory: 4 });
+  const keyless = await homeWith(null);
+  check('store catalog: with no key the Live Store arm serves the file and says why',
+    keyless?.status === 200 && saySource(keyless).endsWith('(zinc: no api key)'),
+    `status=${keyless?.status} source=${saySource(keyless)}`);
+
+  config.livestore.protocol.source = 'file';
+  delete config.livestore.protocol.zinc;
 
   // The frame, checked against the client's own parser rather than against a
   // snapshot: `page-diff` reports which of PAGE_PARSE_PATHS the served page
@@ -1577,6 +1843,224 @@ async function main() {
       && servedList.includes('<k>4</k>'),
     `rank=${otherEndpoint.headers['x-lab-applist-rank']} entryTitle=${otherEndpoint.headers['x-lab-applist-entry-title']} k=${servedList.split('<k>').length - 1}`);
 
+  // Two fixes that came out of a device run on 2026-10-20, each with the failure it
+  // removes. The detail page was titled with the *feed* default ("List Of Items"),
+  // which is what the handset put over the app's own page, so the screen's own title
+  // is the thing to assert rather than the entry's, which was already right.
+  const detailGuid = uuidForApp(fixtureApps[0].id);
+  const detailForTitle = await probeRouter.handle(
+    { ...probeCtx, path: `/v9/catalog/apps/${detailGuid}` }, { config, logger, zinc: null },
+  );
+  const detailTitle = (/^<\?xml[^?]*\?>.*?<a:title type="text">([^<]*)<\/a:title>/s
+    .exec(detailForTitle?.body?.toString('utf8') || '') || [])[1];
+  check('store protocol: an app detail page is titled with the app, not with the list placeholder',
+    detailForTitle?.status === 200
+      && detailTitle === fixtureApps[0].name
+      && !detailForTitle.body.toString('utf8').includes('List Of Items</a:title>'),
+    `title=${detailTitle}`);
+
+  // The salt exists because the client caches an image under the guid it asked for
+  // and never asks again - so a guid whose first answer was a `502` is a guid the
+  // handset will keep drawing as nothing. The pair below is what makes it one
+  // variable: art guids move, app guids do not, and clearing the salt restores every
+  // guid this lab has ever minted.
+  const imageBefore = uuidForImage(fixtureApps[0].id);
+  const appBefore = uuidForApp(fixtureApps[0].id);
+  setImageSalt('suite-salt');
+  const imageSalted = uuidForImage(fixtureApps[0].id);
+  const appSalted = uuidForApp(fixtureApps[0].id);
+  setImageSalt('');
+  const imageCleared = uuidForImage(fixtureApps[0].id);
+  check('store protocol: the image salt moves the art guids and leaves the app guids where they were',
+    imageSalted !== imageBefore && appSalted === appBefore && imageCleared === imageBefore,
+    `image ${imageBefore.slice(0, 8)} -> ${imageSalted.slice(0, 8)} -> ${imageCleared.slice(0, 8)}, app unchanged=${appSalted === appBefore}`);
+
+  // The control that separates "never walked the panes" from "walked them and
+  // discarded them": the accepted page, cut off four characters into the first pane's
+  // first child. A malformed document the client *does* parse draws a code on the
+  // handset; this one draws it only if the reader got that far.
+  // The handler closes over the config it was built with, so an arm is set on that
+  // object and put back afterwards - the same way the archive checks above do it.
+  const serveBefore = config.livestore.protocol.serve;
+  config.livestore.protocol.serve = 'control-pane';
+  const paneControl = await probeRouter.handle(probeCtx, { config, logger, zinc: null });
+  config.livestore.protocol.serve = serveBefore;
+  const paneControlBody = paneControl?.body?.toString('utf8') || '';
+  check('store protocol: the pane control is served as a page and is unparseable inside the first pane',
+    paneControl?.status === 200
+      && paneControl.headers['x-lab-control'] === 'pane-truncated'
+      && Number(paneControl.headers['content-length']) === Buffer.byteLength(paneControlBody)
+      && xmlProblem(paneControlBody) !== null
+      && /<(?:Store)?Pane><Id>$/.test(paneControlBody),
+    `status=${paneControl?.status} bytes=${Buffer.byteLength(paneControlBody)} problem=${xmlProblem(paneControlBody)?.slice(0, 40)}`);
+
+  // The structural spelling. Two sources disagree about the pane element's name -
+  // the handset module's path table (`/Panes/Pane`) and the retail build's type table
+  // (`StorePane`, F-041) - so the lab can serve either, and the check is that serving
+  // the second changes *only* the two names: rename them back and the document must be
+  // the first one again. A spelling change that also moved a field would be two
+  // variables in one delivery, which is exactly what this project's rule forbids.
+  const pageArgs = {
+    sections: pageSections(fixtureCatalog, 25), selfHref: '/v9/catalog/storePages', id: 'x',
+    templateName: 'DynamicHub', templateType: '003', pageFormat: 'panes',
+  };
+  setPageElementStyle('parser');
+  const parserPage = buildStorePageFeed({ ...pageArgs, now: new Date(0) });
+  setPageElementStyle('typetable');
+  const typeTablePage = buildStorePageFeed({ ...pageArgs, now: new Date(0) });
+  setPageElementStyle('parser');
+  const backToParser = typeTablePage
+    .split('<StorePane').join('<Pane').split('</StorePane').join('</Pane')
+    .split('<StoreTemplate').join('<Template').split('</StoreTemplate').join('</Template');
+  check('store protocol: the other element spelling renames the pane and the template and nothing else',
+    typeTablePage.includes('<StorePane>') && typeTablePage.includes('</StorePane>')
+      && typeTablePage.includes('<StoreTemplate')
+      && !typeTablePage.includes('<Pane>') && !typeTablePage.includes('</Pane>')
+      && !typeTablePage.includes('<Template ')
+      && backToParser === parserPage
+      && parserPage.includes('<Pane>') && parserPage.includes('<Template '),
+    `parser=${parserPage.length}b typetable=${typeTablePage.length}b identicalAfterRename=${backToParser === parserPage}`);
+
+  // The category a client opens by tapping a category chip. Until 2026-10-20 this
+  // path matched no route and the handset got `502 upstream_loop` four times in a
+  // row - a request the client makes on a path a finger walks, answered with an
+  // error this lab injected (F-043). Three checks: the id the client sends is
+  // matched through the catalogue's own mapping, a category nobody carries is an
+  // empty list rather than an error, and the filter is real rather than decorative.
+  const categoryServed = await probeRouter.handle(
+    { ...probeCtx, path: '/v8/catalog/appCategories/windowsphone.MusicAndVideo' },
+    { config, logger, zinc: null },
+  );
+  const categoryBody = categoryServed?.body?.toString('utf8') || '';
+  check('store protocol: a category chip is answered with the apps that carry it',
+    categoryServed?.status === 200
+      && categoryServed.headers['x-lab-protocol'] === 'appCategories'
+      && categoryServed.headers['x-lab-category-id'] === 'windowsphone.MusicAndVideo'
+      && categoryServed.headers['x-lab-apps'] === '1'
+      && categoryBody.includes('Sample Radio')
+      && !categoryBody.includes('Sample Notes'),
+    `status=${categoryServed?.status} apps=${categoryServed?.headers['x-lab-apps']}`);
+  const categoryUnknown = await probeRouter.handle(
+    { ...probeCtx, path: '/v8/catalog/appCategories/windowsphone.NobodyCarriesThis' },
+    { config, logger, zinc: null },
+  );
+  check('store protocol: a category nobody carries is an empty list, not a refusal',
+    categoryUnknown?.status === 200
+      && categoryUnknown.headers['x-lab-apps'] === '0'
+      && categoryUnknown.body.toString('utf8').includes('<a:feed'),
+    `status=${categoryUnknown?.status} apps=${categoryUnknown?.headers['x-lab-apps']}`);
+  // The suggestion route had no handler, so this exact request - the one the
+  // handset sent four times in one second at 14:47:22Z - came back `502
+  // upstream_loop`. The check asserts the two things that make the change
+  // readable in a capture: a feed, not a failure, and a header that says the
+  // answer is this lab's own emptiness rather than a reconstructed reply.
+  const SUGGEST_PATH = '/v8/catalog/queries?os=8.10.14219.0&zLocale=it-IT&cc=IT&lang=it-IT&prefix=f'
+    + '&chunksize=4&includeApplications=true&includeAlbums=false&includeArtists=false'
+    + '&includeTracks=false&includePodcasts=false&cf=';
+  const suggestion = await probeRouter.handle(
+    { ...probeCtx, path: SUGGEST_PATH },
+    { config, logger, zinc: null },
+  );
+  const suggestionBody = suggestion?.body?.toString('utf8') || '';
+  check('store protocol: the suggestion route answers with an empty feed instead of a 502',
+    suggestion?.status === 200
+      && suggestion.headers['x-lab-protocol'] === 'suggestions'
+      && suggestion.headers['x-lab-suggestions'] === '0'
+      && suggestion.headers['x-lab-prefix'] === 'f'
+      && suggestion.headers['x-lab-invented'] === '1'
+      && suggestionBody.includes('<a:feed')
+      && suggestionBody.includes('</a:feed>')
+      && !suggestionBody.includes('<a:entry>'),
+    `status=${suggestion?.status} prefix=${suggestion?.headers?.['x-lab-prefix']} entries=${(suggestionBody.match(/<a:entry>/g) || []).length}`);
+  const suggestionNoPrefix = await probeRouter.handle(
+    { ...probeCtx, path: '/v9/catalog/queries?os=8.10.14219.0&cc=IT&lang=it-IT' },
+    { config, logger, zinc: null },
+  );
+  check('store protocol: a suggestion request without a prefix is answered too, and says so',
+    suggestionNoPrefix?.status === 200
+      && suggestionNoPrefix.headers['x-lab-prefix'] === 'none'
+      && suggestionNoPrefix.body.toString('utf8').includes('<a:feed'),
+    `status=${suggestionNoPrefix?.status} prefix=${suggestionNoPrefix?.headers?.['x-lab-prefix']}`);
+  // `q` is the search box's own parameter (F-041's `ApplicationSearch`), and the
+  // lab used to answer it with the whole catalog - a search that returns
+  // everything is indistinguishable from no search at all, in a capture and on
+  // the screen. The query here matches one fixture app and not the other two.
+  const searchHit = await probeRouter.handle(
+    { ...probeCtx, path: '/v9/catalog/apps?chunkSize=50&q=radio' },
+    { config, logger, zinc: null },
+  );
+  const searchHitBody = searchHit?.body?.toString('utf8') || '';
+  check('store protocol: a search answers with the entries that match, not the catalog',
+    searchHit?.status === 200
+      && searchHit.headers['x-lab-query'] === 'radio'
+      && searchHit.headers['x-lab-apps'] === '1'
+      && searchHitBody.includes('Sample Radio')
+      && !searchHitBody.includes('Sample Notes'),
+    `query=${searchHit?.headers['x-lab-query']} apps=${searchHit?.headers['x-lab-apps']}`);
+  const searchMiss = await probeRouter.handle(
+    { ...probeCtx, path: '/v9/catalog/apps?chunkSize=50&q=zzzz' },
+    { config, logger, zinc: null },
+  );
+  const searchNoQuery = await probeRouter.handle(
+    { ...probeCtx, path: '/v9/catalog/apps?chunkSize=50' },
+    { config, logger, zinc: null },
+  );
+  check('store protocol: a search with no match is an empty list, and no query is the whole list',
+    searchMiss?.status === 200 && searchMiss.headers['x-lab-apps'] === '0'
+      && searchNoQuery?.status === 200
+      && searchNoQuery.headers['x-lab-apps'] === String(fixtureApps.length)
+      && searchNoQuery.headers['x-lab-query'] === 'none',
+    `miss=${searchMiss?.headers['x-lab-apps']} none=${searchNoQuery?.headers['x-lab-apps']} query=${searchNoQuery?.headers['x-lab-query']}`);
+
+  // The rule a match is decided by. It is a word prefix and not a substring
+  // because of what the handset showed: `q=f` answered 52 of the Live Store's 203
+  // apps - "WhatsApp (offic*ff*ial)", "Microso*ft* Camera", "VLC *f*or Windows
+  // Store" - all true substrings, none of them what a letter typed into a search
+  // box asks for. A lone letter is matched against the start of the name, because
+  // as a word prefix it matches `for`, `of` and `FM` in every language.
+  const rankOf = (name, query) => searchRank({ name }, query);
+  check('search: a letter matches the start of a name, not an f inside a word',
+    rankOf('Fenice for Twitter', 'f') === 0
+      && rankOf('WhatsApp (unofficial)', 'f') === null
+      && rankOf('Microsoft Camera', 'f') === null
+      && rankOf('VLC for Windows Store', 'f') === null,
+    `Fenice=${rankOf('Fenice for Twitter', 'f')} unofficial=${rankOf('WhatsApp (unofficial)', 'f')}`
+      + ` Microsoft=${rankOf('Microsoft Camera', 'f')} VLC=${rankOf('VLC for Windows Store', 'f')}`);
+  check('search: a word is matched at its start, and a name match outranks it',
+    rankOf('Fenice for Twitter', 'twitter') === 1
+      && rankOf('Fenice for Twitter', 'for twitter') === 1
+      && rankOf('Twitter Flock', 'twitter') === 0
+      && rankOf('Twitter Flock', 'flock') === 1
+      && rankOf('Fenice for Twitter', 'nope') === null,
+    `twitter=${rankOf('Fenice for Twitter', 'twitter')} two-words=${rankOf('Fenice for Twitter', 'for twitter')}`
+      + ` name-prefix=${rankOf('Twitter Flock', 'twitter')} miss=${rankOf('Fenice for Twitter', 'nope')}`);
+  // The three fixture names all begin with "Sample", so a letter that is not S must
+  // answer nothing at all: under the old substring rule `w` still returned "Sample
+  // Weather", which is exactly the "it found something, so it must be searching"
+  // reading this rule removes.
+  const singleLetter = await probeRouter.handle(
+    { ...probeCtx, path: '/v9/catalog/apps?chunkSize=50&q=w' },
+    { config, logger, zinc: null },
+  );
+  const letterHit = await probeRouter.handle(
+    { ...probeCtx, path: '/v9/catalog/apps?chunkSize=50&q=s' },
+    { config, logger, zinc: null },
+  );
+  const wordQuery = await probeRouter.handle(
+    { ...probeCtx, path: '/v9/catalog/apps?chunkSize=50&q=notes' },
+    { config, logger, zinc: null },
+  );
+  check('search: the response says which rule answered it',
+    singleLetter?.headers['x-lab-apps'] === '0'
+      && singleLetter.headers['x-lab-query-match'] === 'title-prefix'
+      && letterHit?.headers['x-lab-apps'] === String(fixtureApps.length)
+      && letterHit.headers['x-lab-query-match'] === 'title-prefix'
+      && wordQuery?.headers['x-lab-apps'] === '1'
+      && wordQuery.headers['x-lab-query-match'] === 'word-prefix',
+    `w=${singleLetter?.headers['x-lab-apps']}/${singleLetter?.headers['x-lab-query-match']}`
+      + ` s=${letterHit?.headers['x-lab-apps']}/${letterHit?.headers['x-lab-query-match']}`
+      + ` notes=${wordQuery?.headers['x-lab-apps']}/${wordQuery?.headers['x-lab-query-match']}`);
+
   // --- fake backend -------------------------------------------------------
   const pki = await new Pki({
     dir: config.pki.dir,
@@ -1828,11 +2312,19 @@ async function main() {
     // The pane type, on the page the proxy serves rather than on a page this file
     // built: a value that reaches the builder and not the wire has happened here
     // before, and the header is what makes the served document readable from the PC.
+    // Two kinds are armed: the first pane is the featured one and the rest are
+    // collections. The check reads both off the served document and off the header,
+    // because a value that reaches the builder and not the wire has happened here
+    // before. A page armed with one kind for all panes still passes: the featured
+    // value is what decides, not this check.
+    const featuredOnWire = home.body.split('<Type>FeaturedItem</Type>').length - 1;
     check('store protocol: the type every pane is given is on the served page and reported in its headers',
       home.headers['x-lab-pane-type'] === 'Collection'
+        && featuredOnWire === 0
         && home.body.split('<Type>Collection</Type>').length - 1 === sections.length,
       `x-lab-pane-type=${home.headers['x-lab-pane-type']}`
-        + ` panes=${home.body.split('<Type>Collection</Type>').length - 1}/${sections.length}`);
+        + ` panes=${featuredOnWire} featured + ${home.body.split('<Type>Collection</Type>').length - 1} collection`
+        + ` of ${sections.length}`);
 
     // The next single variable after F-032, asserted on both arms so it can be armed
     // and un-armed without a device run: off must leave the page exactly as every
@@ -1980,9 +2472,14 @@ async function main() {
     });
     let unknownJson = null;
     try { unknownJson = JSON.parse(unknown.body); } catch { unknownJson = null; }
+    // The refusal has to name its arm too. A 404 without `x-lab-source` is a capture
+    // that cannot be attributed: the same request answers differently depending on
+    // which catalog is armed, so the header is the only thing that says which one
+    // said no - and the app the phone asked for is the one it cannot draw.
     check('store protocol: a GUID the lab never minted is refused, not relayed',
-      unknown.status === 404 && unknownJson?.error === 'app_not_found',
-      `status=${unknown.status} error=${unknownJson?.error}`);
+      unknown.status === 404 && unknownJson?.error === 'app_not_found'
+        && unknown.headers['x-lab-source'] === config.livestore.protocol.catalogFile,
+      `status=${unknown.status} error=${unknownJson?.error} source=${unknown.headers['x-lab-source']}`);
 
     const hub = await httpsViaProxy({ ...target, requestPath: '/v8/catalog/hubs?hub=lifestyle&cc=IT', method: 'GET' });
     check('store protocol: a hub page is answered too',

@@ -334,11 +334,18 @@ if (config.livestore?.protocol?.enabled) {
       check(`the served page carries the panes the parser counts`,
         panes > 0 && (response.body.match(/<\/Pane>/g) || []).length === panes,
         `panes=${panes} templates=${(response.body.match(/<Template[ >]/g) || []).length}`);
-      // The document type: the page root has to be the element the parser's
-      // store-page grammar names, not the Atom feed the older generation used.
+      // The document type, and this check used to be the opposite of what the device
+      // wants. It asserted `<StorePage>` because the parser's path table spells
+      // `/Panes/Pane` and that root is where the parser unit-test's documents were
+      // rooted - and every delivery rooted there left the home blank (F-052 to F-058).
+      // On 2026-10-20 17:58 the handset drew the home when the same document was
+      // rooted at `<a:feed>`, the root the *archive* uses and the one the search list,
+      // the app detail and a category - all of which draw - are rooted at (F-065).
+      // The check now asserts the root the device draws, and names the format in the
+      // detail line so a failed run says which arm was served.
       const root = (response.body.match(/^<\?xml[^?]*\?>\s*<([A-Za-z:]+)/) || [])[1];
-      check(`the served page is rooted where the parser looks`,
-        root === 'StorePage',
+      check(`the served page is rooted at the feed the device draws`,
+        root === 'a:feed',
         `root=<${root}> format=${response.headers['x-lab-page-format']}`);
     } else {
       const archivedType = response.headers['x-lab-archive-template'];
