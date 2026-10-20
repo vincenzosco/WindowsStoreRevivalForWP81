@@ -9,6 +9,7 @@ run and in what order*, and the spec says *what was designed and why*.
 | Findings | [`FINDINGS.md`](FINDINGS.md) | What do we know about the phone, the Store and the lab, and what measured it? |
 | Maintenance | [`MAINTENANCE.md`](MAINTENANCE.md) | How do I keep this working, and how do I re-measure something that may have rotted? |
 | Design | [`superpowers/specs/2026-10-15-wp81-store-revival-design.md`](superpowers/specs/2026-10-15-wp81-store-revival-design.md) | What was designed, what was decided, what was thrown away. |
+| Domains | [`DOMAINS.md`](DOMAINS.md) | Which host is which service, who says so, and what this lab does with it today. Every row carries its provenance, because most of them are not measurements of this phone. |
 | Operator | [`../README.md`](../README.md), [`../README.it.md`](../README.it.md) | How to run it today, in English and in Italian. |
 
 `FINDINGS.md` is the one that grows. The other three are edited when the thing they describe

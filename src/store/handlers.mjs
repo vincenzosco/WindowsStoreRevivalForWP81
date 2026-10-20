@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { isInterceptedHost } from '../config.mjs';
 import { createStoreProtocol } from './protocol.mjs';
 import { createStoreImages } from './images.mjs';
+import { createDeviceProvisioning } from './provisioning.mjs';
 import {
   detailDocument, entryById, listDocument, liveCatalog, liveRoute,
 } from './live-client.mjs';
@@ -299,6 +300,10 @@ export function buildHandlers(config) {
     // Before the protocol handler: the image CDN is another host, and an image
     // path that reached the page routes would be answered with a page.
     createStoreImages(config),
+    // Its own host and its own path prefix, so it cannot shadow a Store route; it
+    // sits before the protocol handler only to keep the two host families apart in
+    // the router's per-handler counters.
+    createDeviceProvisioning(config),
     createStoreProtocol(config),
     createLiveClient(config),
     createCatalogBridge(config),

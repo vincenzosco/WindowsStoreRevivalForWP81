@@ -32,7 +32,7 @@ same event appears as `17:56:07` local and `15:56:07Z`.
 | The served response that file matches | `bodies/0117-res.bin`, 55234 bytes, SHA-256 `38E904A1F685AE9F9E1B71DF3B809A951D798BD5461E604FDCBBBD1355ED4FBE` — the delivery at `2026-10-15T18:47:27.289Z` | `captures/session-2026-10-15_15-36-48/index.jsonl` + `bodies/`, `sha256sum` |
 | What the device wrote about the Store in the whole session | **one** file — the cached page above. 84 files under `Data` since 17:00, 18 past the hive/telemetry/ETW filter, 1 of them Store-related | elevated readout, 2026-10-15 21:05 |
 | Page built today from the fixture | 29893 bytes, identical except `<a:updated>` | `npm run store:page`, `.selftest/cmp.fresh.txt` |
-| Checks in the suite | 147, all passing | `npm run selftest`, 2026-10-17 |
+| Checks in the suite | 155, all passing | `npm run selftest`, 2026-10-20 |
 | Exchanges in `captures/` | 487 480 over 28 sessions, of which **109 are a device's** - 99.98 % of the index is this PC | `npm run analyze -- --all-sessions`, 2026-10-16 |
 | DNS records in the same capture | 19 615 from 21 addresses, and only **8 639** are this PC's - a `.151` that asks for `a.root-servers.net` 6 437 times, not the phone | same command |
 | Devices the requests identify in that capture | **two** handsets: `x-wp-device-id 40752FED…5A1872` (the one above) and `3499541B…EEA32B`, `os=8.10.14226.0`, `dm=RM-941_eu_hungary_356`; the two overlap for 2 h 38 m on 2026-10-15 | same command |
@@ -1627,6 +1627,62 @@ Each one changes **a single variable**, and each names the value it replaced so 
 - **Does not establish** That the app cannot be installed without an account, that Microsoft's licensing service is
   reachable, or that a licence can be satisfied from this lab. Nothing in this entry is about signatures; it is
   about who the phone talked to, and the answer is: only this lab.
+
+
+## F-034 The device certificate request has a written contract, and the lab can now answer it
+
+- **Date** 2026-10-20 · **Area** the device-identity path, and the lab's own host list · **Method** read of the contract in
+  [`ReLiveWP/ReLiveWP`](https://github.com/ReLiveWP/ReLiveWP) (`src/services/ReLiveWP.Services.Activation/Controllers/CertificateRequestController.cs`),
+  then `src/pki.mjs` + `src/store/provisioning.mjs` written against it, `npm run selftest` **155/155** exit 0, and one armed round
+  on the running lab measured on both listeners - `:80` with the phone's `Host`, and `:443` over TLS with SNI - then disarmed with
+  `POST /__lab/reload`.
+- **Why** `devicecertificateservice.windowsphone.com` has been in `tools/analyze-captures.mjs`'s Store-host list for as long as that
+  tool has had one, and no handler has ever matched it: every such request was a `502` this lab injected, the same defect F-031 found
+  on the image CDN, on the one host a device uses to prove it is a device. The install path is where that would matter - F-033 ends at a
+  gate that fails before asking anybody - and no capture of the request, the answer or the host exists: not in the archive (F-021), not
+  on the phone (F-020), not in the FFU (F-024), where the only related tokens are the host name and nothing about the protocol.
+- **Where the contract comes from, named rather than implied** Another project reversing the same era of handsets implements the WP7
+  endpoint, and its controller is specific enough to build from: `POST /dcs/certificaterequest` (plus `/certificaterequest`),
+  `content-type: application/pkcs10`, headers `X-Windows-Phone-Activation-Protocol-Version` (`1.0`/`2.0`),
+  `X-Windows-Phone-Activation-Code` and `X-Windows-Phone-Device-Info` (a `Name:value,Name:value` list whose `DeviceUniqueID` is
+  mandatory), a **base64** PKCS#10 body, a **base64** PKCS#7 chain back with `application/c-x509-ca-cert`, `400` for a malformed
+  request or a missing header and `409` for a code it will not honour. Their docs also say why the endpoint exists at all: the device
+  "will refuse to connect to any Windows Live services without a valid certificate chain". That is a statement about WP7 and it is
+  **not** a measurement of this 8.1 handset - no request from this phone has ever been captured, so the response says so on the wire.
+- **The change** `src/store/provisioning.mjs` (new, `store-provisioning`), `Pki.signCsr()` in `src/pki.mjs`, the `pki` handed to the
+  router through `deps`, `livestore.provisioning` in `src/config.mjs` and `config.json`, **off by default**. It answers the two routes,
+  refuses with a named reason (`x-lab-refused: no_protocol_version | unsupported_protocol_version | no_activation_code |
+  no_device_info | no_device_unique_id | activation_code_refused | malformed_certificate_request | pki_unavailable`), and returns
+  `x-lab-invented: 1` on every answer. A body that is not base64 is refused by a round-trip comparison rather than by Node's tolerant
+  decoder, because a text body would otherwise become mystery bytes and reach openssl as an error nobody can attribute.
+- **The part that had to be decided rather than copied, and it is a security decision** `openssl x509 -req -copy_extensions copy`
+  is the obvious way to sign whatever was asked for, and on a CA that is trusted by the phone for TLS interception it is a way to
+  mint a certificate for `login.live.com` from a request anyone on the LAN can send. So the extensions are **fixed** in the signer -
+  `basicConstraints=critical,CA:FALSE`, `keyUsage=digitalSignature,keyEncipherment`, `extendedKeyUsage=clientAuth`, no SAN - and the
+  request's own are never copied. The selftest sends a CSR that asks for `CA:TRUE` **and** `subjectAltName=DNS:login.live.com` and fails
+  if either appears in the issued certificate.
+- **Verified, live, on both listeners** Armed (`enabled: true`, the host added to `proxy.mitm.hosts` and `dns.hijack.names`, then
+  `POST /__lab/reload` - no restart, so the phone's connection was never dropped): `POST http://127.0.0.1:80/dcs/certificaterequest` with
+  the phone's `Host` and the three headers answered **`200`**, `content-type: application/c-x509-ca-cert`, `content-length: 2268`,
+  `x-lab-source: provisioning`, `x-lab-invented: 1`, `x-lab-cert-subject: CN=lab-device-live`, `x-lab-device-unique-id: 0f1e2d3c`; the
+  body decodes to a **1701-byte PKCS#7 with two certificates**, `openssl verify -CAfile ca/ca.crt` says **OK**, and the leaf is
+  `CA:FALSE` + `TLS Web Client Authentication` with **no copied SAN**. The same request over TLS on `:443` with SNI and the lab CA
+  answers the identical 2268 bytes, so the route answers on the listener the phone actually reaches. Both exchanges are in
+  `captures/session-2026-10-20_04-50-23/index.jsonl` with `decision: store:provisioning`. Disarmed and reloaded: the same request is
+  `502 passthrough` again, and `storeHandlers` still lists the handler while `enabled: false` keeps it out of the way.
+- **What the suite pins** Four checks: off falls through, and on it refuses an unlisted host (`421`), a missing protocol header, a body
+  that is not a request and a refused activation code - with the reason named in a header, not only in a status; a valid request is a
+  two-certificate chain that **verifies against the lab CA**; the issued certificate is a client certificate and not the one the
+  request asked for; and the same request twice returns the same bytes (`x-lab-cert-cached: 1`) on both routes, because a client that
+  retries should not collect a new serial per attempt.
+- **What this does not establish, in the order it matters** That this handset asks for this path at all: the armed round was measured
+  **from this PC**, with a request shaped by the WP7 contract, and no device request has been captured. That the 8.1 contract is the
+  7 one - the headers, the base64 body and the `c-x509-ca-cert` answer are their reading of the older flow, and the phone's own request
+  is the only thing that can confirm or refute it. That a chain from this CA would be accepted for anything: it is this lab's root, and
+  a real service would reject it, so the reading is only ever "did the client ask, and did it accept a chain at all". And nothing here
+  connects provisioning to the install wall of F-033 - that connection is the hypothesis the row exists to make testable, not a result.
+- **Undo** `livestore.provisioning.enabled` back to `false` and `POST /__lab/reload`; that is the whole undo, and it is what the lab is
+  on now. The host is out of both lists - arming it again is three edits, on purpose, so no single value can turn a diagnostic on.
 
 
 ## Open experiments, continued

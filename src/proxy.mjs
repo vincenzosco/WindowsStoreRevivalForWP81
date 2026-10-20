@@ -628,6 +628,10 @@ export class MitmProxy {
       if (this.router) {
         const handled = await this.router.handle(ctx, {
           proxy: this, config: this.config, logger: this.log, zinc: this.zinc,
+          // The signer for a device certificate request. Handed in rather than
+          // reached for through `proxy`, so a handler that signs cannot quietly
+          // start working against a PKI the proxy was not given.
+          pki: this.pki,
         });
         if (handled) {
           decision = handled.decision || 'router';

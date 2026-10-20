@@ -17,7 +17,8 @@ import zlib from 'node:zlib';
 import https from 'node:https';
 import net from 'node:net';
 import tls from 'node:tls';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import path from 'node:path';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -1160,6 +1161,122 @@ async function main() {
       && pixels.length === stride * height,
     `${width}x${height}, ${colours.size} colour(s), centre=${centre} corner=${corner}`);
   config.livestore.images.enabled = false;
+
+  // Device provisioning (F-034). The protocol comes from another project reversing
+  // the same era of handsets, so there is no capture to compare against and the
+  // checks below are the only thing standing between that reading and a claim about
+  // this phone. They are written around the two things a wrong implementation would
+  // get away with: signing something that is not a request, and signing a request
+  // for more than the device it came from.
+  const provisionPki = await new Pki({
+    dir: config.pki.dir,
+    commonName: config.pki.commonName,
+    days: config.pki.days,
+    leafDays: config.pki.leafDays,
+    log: () => {},
+  }).init();
+  const openssl = promisify(execFile);
+  const csrPemPath = path.join(WORK, 'provision-test.csr');
+  const csrDerPath = path.join(WORK, 'provision-test.der');
+  const csrKeyPath = path.join(WORK, 'provision-test.key');
+  // A request that asks for more than it should: `CA:TRUE` and a subjectAltName for
+  // a Live host. A signer that copied the request's extensions would hand back a
+  // certificate this lab's own CA vouches for, for a name it does not own - which is
+  // the whole risk of running a trusted root on the phone.
+  await openssl(provisionPki.opensslBin, [
+    'req', '-new', '-newkey', 'rsa:2048', '-nodes',
+    '-keyout', csrKeyPath, '-out', csrPemPath,
+    '-subj', '/CN=lab-device-selftest',
+    '-addext', 'basicConstraints=critical,CA:TRUE',
+    '-addext', 'subjectAltName=DNS:login.live.com',
+  ], { timeout: 120000 });
+  await openssl(provisionPki.opensslBin, ['req', '-in', csrPemPath, '-outform', 'DER', '-out', csrDerPath]);
+  const csrBase64 = (await fsp.readFile(csrDerPath)).toString('base64');
+
+  const provHost = 'devicecertificateservice.windowsphone.com';
+  const provHeaders = {
+    'x-windows-phone-activation-protocol-version': '1.0',
+    'x-windows-phone-activation-code': 'ABCDE-ABCDE-ABCDE-ABCDE-ABCDE',
+    'x-windows-phone-device-info': 'DeviceUniqueID:0f1e2d3c,OSVersion:8.10.14219.0,Locale:0409,Model:RM-941',
+  };
+  const provCtx = (overrides = {}) => ({
+    ...probeCtx,
+    host: provHost,
+    method: 'POST',
+    path: '/dcs/certificaterequest',
+    headers: provHeaders,
+    body: Buffer.from(csrBase64),
+    ...overrides,
+  });
+  const provDeps = { config, logger, zinc: null, pki: provisionPki };
+
+  config.livestore.provisioning = { ...(config.livestore.provisioning || {}), enabled: false };
+  const provOff = await probeRouter.handle(provCtx(), provDeps);
+  config.livestore.provisioning = { ...(config.livestore.provisioning || {}), enabled: true };
+  const provUnlisted = await probeRouter.handle(provCtx(), provDeps);
+  config.proxy.mitm.hosts.push(provHost);
+  const provNoHeaders = await probeRouter.handle(provCtx({ headers: {} }), provDeps);
+  const provGarbage = await probeRouter.handle(provCtx({ body: Buffer.from('bm90IGEgY2VydGlmaWNhdGU=') }), provDeps);
+  const provRefused = await probeRouter.handle(provCtx({
+    headers: { ...provHeaders, 'x-windows-phone-activation-code': 'NOPVK-NOPVK-NOPVK-NOPVK-NOPVK' },
+  }), provDeps);
+  const provWrongMethod = await probeRouter.handle(provCtx({ method: 'GET', body: null }), provDeps);
+  const provAnswer = await probeRouter.handle(provCtx(), provDeps);
+  const provRetry = await probeRouter.handle(provCtx(), provDeps);
+  const provSecondRoute = await probeRouter.handle(provCtx({ path: '/certificaterequest' }), provDeps);
+  const provNoPki = await probeRouter.handle(provCtx(), { config, logger, zinc: null });
+
+  // The chain itself, read the way a client would: decode, split, verify the leaf
+  // against the CA, and read the extensions back out of the issued certificate.
+  const chainDer = Buffer.from(String(provAnswer?.body || ''), 'base64');
+  const chainDerPath = path.join(WORK, 'provision-chain.p7b');
+  const chainPemPath = path.join(WORK, 'provision-chain.pem');
+  const leafPath = path.join(WORK, 'provision-leaf.pem');
+  let chainOk = false;
+  let leafText = '';
+  let verifyOut = '';
+  try {
+    await fsp.writeFile(chainDerPath, chainDer);
+    await openssl(provisionPki.opensslBin, ['pkcs7', '-inform', 'DER', '-in', chainDerPath, '-print_certs', '-out', chainPemPath]);
+    const pemBlocks = String(await fsp.readFile(chainPemPath, 'utf8')).match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
+    await fsp.writeFile(leafPath, `${pemBlocks[0] || ''}\n`);
+    const verify = await openssl(provisionPki.opensslBin, ['verify', '-CAfile', path.join(config.pki.dir, 'ca.crt'), leafPath]);
+    verifyOut = String(verify.stdout).trim();
+    leafText = String((await openssl(provisionPki.opensslBin, ['x509', '-in', leafPath, '-noout', '-text'])).stdout);
+    chainOk = pemBlocks.length === 2 && /: OK$/.test(verifyOut);
+  } catch (err) {
+    verifyOut = `failed: ${err.message}`;
+  }
+  check('provisioning: off it falls through, on it refuses an unlisted host, a missing header, a bad body and a refused code',
+    provOff === null && provUnlisted?.status === 421 && provNoHeaders?.status === 400
+      && provNoHeaders.headers['x-lab-refused'] === 'no_protocol_version'
+      && provGarbage?.status === 400 && provGarbage.headers['x-lab-refused'] === 'malformed_certificate_request'
+      && provRefused?.status === 409 && provWrongMethod?.status === 405
+      && provNoPki?.status === 503,
+    `off=${provOff === null ? 'passthrough' : 'answered'} unlisted=${provUnlisted?.status}`
+      + ` headers=${provNoHeaders?.status}/${provNoHeaders?.headers['x-lab-refused']}`
+      + ` body=${provGarbage?.status}/${provGarbage?.headers['x-lab-refused']}`
+      + ` refused=${provRefused?.status} get=${provWrongMethod?.status} noCA=${provNoPki?.status}`);
+  check('provisioning: a valid request answers a two-certificate chain that verifies against the lab CA',
+    provAnswer?.status === 200
+      && provAnswer.headers['content-type'] === 'application/c-x509-ca-cert'
+      && provAnswer.headers['x-lab-invented'] === '1'
+      && provAnswer.headers['x-lab-source'] === 'provisioning'
+      && chainOk,
+    `status=${provAnswer?.status} ${chainDer.length}B ${verifyOut}`);
+  check('provisioning: the issued certificate is a client certificate, not the one the request asked for',
+    /CA:FALSE/.test(leafText)
+      && /TLS Web Client Authentication/.test(leafText)
+      && !/DNS:login\.live\.com/.test(leafText),
+    'CA:FALSE + clientAuth, no SAN copied from the request');
+  check('provisioning: the same request twice is the same certificate, and both routes answer it',
+    provRetry?.status === 200 && provAnswer?.body.equals(provRetry.body)
+      && provRetry.headers['x-lab-cert-cached'] === '1'
+      && provSecondRoute?.status === 200 && provSecondRoute.body.equals(provAnswer.body),
+    `first=${provAnswer?.headers['x-lab-cert-cached']} retry=${provRetry?.headers['x-lab-cert-cached']}`);
+
+  config.livestore.provisioning.enabled = false;
+  config.proxy.mitm.hosts = config.proxy.mitm.hosts.filter((entry) => entry !== provHost);
 
   config.livestore.client.enabled = false;
   config.proxy.mitm.hosts = mitmBefore;

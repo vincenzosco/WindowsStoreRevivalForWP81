@@ -110,6 +110,25 @@ const DEFAULTS = {
       enabled: false,
       hosts: ['*.marketplaceimages.windowsphone.com'],
     },
+    // The device certificate request. This is the one piece of the account/install
+    // path this lab can answer without a capture of its own, because the protocol is
+    // written down by another project reversing the same era of handsets
+    // (ReLiveWP, `dcs/certificaterequest`) rather than guessed here. Off by default
+    // and armed the same way as the live client: this flag, the host in
+    // `proxy.mitm.hosts`, and the host in `dns.hijack.names` - a name hijacked in
+    // one list and not the other is a name whose traffic is a 502 this lab injected.
+    //
+    // The shape is Windows Phone 7's; this handset is 8.1 and no capture of its
+    // request exists, so the answer carries `x-lab-invented: 1` and the reading that
+    // matters is whether the phone ever asks for this path at all. Issued chains come
+    // from the lab CA with a fixed client profile (no `-copy_extensions`), so a
+    // request cannot mint a certificate for another host. See F-034.
+    provisioning: {
+      enabled: false,
+      hosts: ['devicecertificateservice.windowsphone.com'],
+      protocols: ['1.0', '2.0'],
+      refusedCodes: ['NOPVK-NOPVK-NOPVK-NOPVK-NOPVK'],
+    },
     // The JSON API of the *second* client on the handset - the Live Store app,
     // not the system Store - read off that client's own cache (F-029). Off unless
     // asked for, and arming it is two edits: this flag and the DNS hijack for

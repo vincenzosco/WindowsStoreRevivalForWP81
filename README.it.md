@@ -387,6 +387,7 @@ passthrough**: un bug in un handler non rompe il telefono.
 | `store-health` | Risponde su `<host intercettato>/__store/health` con un JSON che prova che la richiesta è arrivata al lab e la risposta è tornata indietro, senza toccare alcun backend | sì |
 | `store-protocol` | Risponde agli endpoint che il telefono chiama **davvero** per aprire lo Store (`/v9/catalog/storePages`, `/v8/catalog/hubs`, `/v[89]/catalog/apps`, `/v8/catalog/updates` e - dal 2026-10-17 - `/v8/Configuration/Stores/...`), nel formato XML che sa leggere | no, va abilitato |
 | `store-images` | Risponde al CDN delle immagini (`cdn.marketplaceimages.../v8/images/<guid>`) con un PNG segnaposto **con un segno visibile** (cornice e croce diagonale): un campo piatto non distingue «il client ha disegnato i nostri byte» da «ha disegnato il proprio sfondo vuoto», ed è la prima versione di questo handler a dirlo; prima erano 502 iniettati dal lab, 420 in due minuti e mezzo su una sola ricerca (F-031) | no, va abilitato |
+| `store-provisioning` | Risponde alla richiesta di certificato del dispositivo (`POST /dcs/certificaterequest` e `/certificaterequest`): `application/pkcs10`, i tre header `X-Windows-Phone-*`, body **base64** dentro e catena PKCS#7 **base64** fuori come `application/c-x509-ca-cert`, firmata dalla CA del lab. Il contratto è la lettura WP7 di un altro progetto di reverse engineering (ReLiveWP), **non** una misura di questo telefono: ogni risposta porta `x-lab-invented: 1` e ogni rifiuto il proprio motivo in `x-lab-refused` (F-034). Firma solo con profilo fisso - `CA:FALSE`, `clientAuth`, nessun SAN copiato dalla richiesta | no, va abilitato |
 | `store-live-client` | L'API JSON del **secondo** client presente sul telefono (l'app Live Store, non lo Store di sistema): `/apps`, `/games`, `/apps/search`, `/app/{id}`, `/me` - forma letta dalla sua cache (F-029, F-030) | no, va abilitato |
 | `catalog-bridge` | Serve il catalogo Live Store sotto un prefisso di path sugli host intercettati | no, va abilitato |
 
@@ -809,8 +810,11 @@ src/
   paths.mjs       path canonici (Windows: Documenti vs Documents)
   store/
     router.mjs    dispatch degli handler, con fallback sul passthrough
-    handlers.mjs  store-health + store-images + store-live-client + catalog-bridge
+    handlers.mjs  store-health + store-images + store-provisioning + store-live-client
+                  + catalog-bridge
     images.mjs    il CDN delle immagini, con un PNG segnaposto
+    provisioning.mjs  la richiesta di certificato del dispositivo, firmata dalla CA
+                      del lab (contratto letto da ReLiveWP, F-034)
     live-client.mjs  l'API JSON del client Live Store, forma e campi da F-029
     fixtures/     catalogo di esempio per lavorare offline
 tools/

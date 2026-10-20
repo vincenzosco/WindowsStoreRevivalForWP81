@@ -102,6 +102,21 @@ drawn; if only the colour does, it is not. `GET /__lab/images` counts what the l
 reading a capture. It is a count of responses and says nothing about what the handset drew.
 See F-031.
 
+The device-identity path is answered too, since 2026-10-20, and this is the one handler whose
+protocol is **not** from a capture: `devicecertificateservice.windowsphone.com` has been treated
+as Store traffic by the capture analysis for as long as that tool has had a host list, and no
+handler had ever matched it - so every such request was a `502` this lab injected, on the one
+host a device uses to prove it is a device. The `store-provisioning` handler answers
+`POST /dcs/certificaterequest` with a PKCS#7 chain signed by the lab CA, in the shape another
+project reversing the same era of handsets implements: `application/pkcs10`, three
+`X-Windows-Phone-*` headers, base64 in and base64 out as `application/c-x509-ca-cert`. That is
+Windows Phone **7**'s contract, not a measurement of this 8.1 handset, so every answer carries
+`x-lab-invented: 1`, every refusal names itself in `x-lab-refused`, and the handler is **off by
+default**. Signing uses a fixed client profile (`CA:FALSE`, `clientAuth`, no SAN, no
+`-copy_extensions`): a CSR that asks for `CA:TRUE` or for `login.live.com` gets neither, because
+this CA is a root the phone trusts. See F-034, and [`docs/DOMAINS.md`](docs/DOMAINS.md) for which
+host is which service and how certain each row is.
+
 The handset carries a **second** store client, and it works: a community app whose own cache
 holds the JSON answers of `store-api.live.net.co` (`/apps`, `/games`, `/apps/search?q=`,
 `/app/{id}`, `/me`, and a sign-in at `id.live.net.co`). That protocol is now served from the
