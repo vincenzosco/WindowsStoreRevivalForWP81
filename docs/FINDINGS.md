@@ -2175,3 +2175,31 @@ Each one changes **a single variable**, and each names the value it replaced so 
   after a reboot, so the setting is a correction to a document nobody has been seen to adopt.
 - **Limit** Every offset in this entry is the image's, build `3058.50000.1445.1005`; the handset runs `8.10.14219.0`. The table is
   data in a build, not a reading of this device's own copy.
+
+## F-042 The push vocabulary of this build is BNS and WPN, and no push host is baked into it
+
+- **Date** 2026-10-20 · **Area** the notification path, which this lab has never touched · **Method**
+  `npm run image:find -- --file <ffu> --pattern 'notify.live.net' --pattern 'NotificationService' --pattern
+  'PushChannel' --pattern 'mpns' --context 400`, both encodings, every hit with its offset.
+- **Measured: the WP7-era names are absent** `notify.live.net` -> **0 hits**, `mpns` -> **0 hits**, ASCII and
+  UTF-16LE, in 1 611 661 312 bytes. Whatever this client uses to reach a push service, it is not a host string
+  this build carries.
+- **Measured: what it does carry, at @677591480 (utf16)** `ID_CAP_BSS_PUSH_INTERFACE`, `BNSNotifyPushMsg`,
+  `BNSNotifyNabSyncMsg`, `GetLightupStatus`, `GetWpnPhoneRegistrationEndpoint`, `RegisterWithPushChannel`,
+  `UnregisterWithPushChannel`; and at @1008332561 (ascii) the error family `E_BNS_SYSTEM_SPOT_FULL`,
+  `E_BNS_DUPLICATE_ITEM`, `E_BNS_ITEM_NOT_FOUND` beside `szPushChannel`, `_channelName`,
+  `_pushRawMessage`, `set_Digest`, `_nabMessageHeader`, `_nabMessageBody`, `_nabMessageDigest`.
+- **What that says, narrowly** Three names, three sentences. (1) A channel is registered against an endpoint the
+  client *asks for* (`GetWpnPhoneRegistrationEndpoint`) and then `Register`/`UnregisterWithPushChannel` act on
+  it - a registration flow, not a constant. (2) Delivery is a BNS message with its own classes
+  (`BNSNotifyPushMsg`, `BNSNotifyNabSyncMsg`) and its own error codes. (3) A notification payload carries a
+  **NAB header, body and digest** - a framing this lab has no code for, because the lab has never answered a
+  push request at all.
+- **What it changes here, and the honest answer is nothing yet** The lab has no push host hijacked, no capture of
+  a push request, and no finding that a notification was ever delivered to this handset. This entry exists
+  because the vocabulary is what a later pass would start from, and because a zero on `notify.live.net` is the
+  kind of negative that stops someone from wiring up an MPNS endpoint that this client cannot be talking to.
+- **Does not establish** That the client speaks BNS/WPN *to the exclusion of* NSP, that the `E_BNS_*` codes are
+  the ones a device meets, or which host `GetWpnPhoneRegistrationEndpoint` returns - that is a runtime answer and
+  this is a byte search of a build. Nor that this build is the handset's: the phone runs `8.10.14219.0`, the
+  image is `3058.50000.1445.1005`, and a vocabulary can differ between them.
