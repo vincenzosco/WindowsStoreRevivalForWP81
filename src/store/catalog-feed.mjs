@@ -623,6 +623,7 @@ function templateBlockXml({ templateName, templateType, typeKeyForm = 'both' }) 
 function feedHeader({
   selfHref, updated, title, id, impression, sections, templateName, templateType, typeKeyForm,
   blocks = true, dataSource = null, paneType = '', paneSubType = '',
+  withItems = false, paneBackgroundImage = false, offerMediaInstance = false, now,
 }) {
   return '<?xml version="1.0" encoding="utf-8"?>'
     + `<a:feed xmlns:a="${ATOM_NS}" xmlns:os="${OPEN_SEARCH_NS}" xmlns="${CATALOG_NS}">`
@@ -634,8 +635,15 @@ function feedHeader({
     // Panes before templates, the order the parser's own string table holds the
     // two paths in - the closest thing to evidence about document order that the
     // phone offers. Omitted when the caller places them one level up, under the
-    // page root, which is where the page grammar puts them.
-    + (blocks && sections ? panesXml({ sections, dataSource, paneType, paneSubType }) : '')
+    // page root, which is where the page grammar puts them - and carried here,
+    // inside the feed, when `panesInFeed` asks for the other reading of the same
+    // absolute path (see `panesInFeed` in config.json).
+    + (blocks && sections
+      ? panesXml({
+        sections, dataSource, paneType, paneSubType, withItems,
+        backgroundImage: paneBackgroundImage, offerMediaInstance, now,
+      })
+      : '')
     + (blocks ? templateBlockXml({ templateName, templateType, typeKeyForm }) : '');
 }
 
@@ -691,7 +699,7 @@ export function buildStorePageFeed({
   sections = [], selfHref = '/', id = 'storePage', title = 'List Of Items',
   templateName, templateType, typeKeyForm, pageFormat, dataSource = null,
   paneType = '', paneSubType = '', paneBackgroundImage = false, offerMediaInstance = false,
-  now = new Date(),
+  panesInFeed = false, now = new Date(),
 } = {}) {
   const format = normalizePageFormat(pageFormat);
   const stamp = feedStamp(now);
@@ -727,12 +735,21 @@ export function buildStorePageFeed({
   // `PendingListDownload::ParseFromStream` (`@27812`). The declarations therefore
   // belong on the document element. The feed keeps its own copies, which are
   // redundant, legal, and leave the archive-verified subtree byte-identical.
+  // `panesInFeed` is the second reading of one absolute path. `/Panes/Pane` is a
+  // path from the document root, and this document has two roots to pick from:
+  // the page's (`<StorePage>`) and the feed's (`<a:feed>`). Every page served so
+  // far has put the panes under the page root; this flag puts them inside the
+  // feed, which is where a parser that selects the feed first and walks the pane
+  // path from there would find them. One document, one position, nothing else.
+  const panesOnTheFeed = wantsPageRoot && panesInFeed;
   const header = feedHeader({
     selfHref, updated: stamp, title, id, impression,
-    sections: wantsPageRoot ? null : sections,
+    sections: wantsPageRoot && !panesOnTheFeed ? null : sections,
     templateName, templateType, typeKeyForm,
-    blocks: !wantsPageRoot,
+    blocks: !wantsPageRoot || panesOnTheFeed,
     dataSource, paneType, paneSubType,
+    withItems: format === 'panes',
+    paneBackgroundImage, offerMediaInstance, now,
   });
   const feed = header + entries + feedFooter();
 
@@ -743,11 +760,13 @@ export function buildStorePageFeed({
   const withoutDeclaration = feed.replace(/^<\?xml[^?]*\?>/, '');
   return '<?xml version="1.0" encoding="utf-8"?>'
     + `<${STORE_PAGE_ROOT} xmlns:a="${ATOM_NS}" xmlns:os="${OPEN_SEARCH_NS}" xmlns="${CATALOG_NS}">`
-    + panesXml({
-      sections, withItems: format === 'panes', now, dataSource, paneType, paneSubType,
-      backgroundImage: paneBackgroundImage, offerMediaInstance,
-    })
-    + templateBlockXml({ templateName, templateType, typeKeyForm })
+    + (panesOnTheFeed
+      ? ''
+      : panesXml({
+        sections, withItems: format === 'panes', now, dataSource, paneType, paneSubType,
+        backgroundImage: paneBackgroundImage, offerMediaInstance,
+      })
+        + templateBlockXml({ templateName, templateType, typeKeyForm }))
     + withoutDeclaration
     + `</${STORE_PAGE_ROOT}>`;
 }
@@ -832,18 +851,23 @@ export function buildProductUpdatesResponse({ skus = [] } = {}) {
  * @param {string} [options.storeId] the OEM/operator id the request path named, e.g. `NOKIA`.
  * @param {string} [options.cc] market.
  * @param {string} [options.lang] locale, written as `CatalogLocale` and as `{locale}`'s base.
- * @param {string} [options.scheme] the scheme the request arrived on.
- * @param {string} [options.host] the host the request arrived on.
+ * @param {string} [options.host] the host the request arrived on. The **scheme** is
+ *   not a parameter on purpose: each base carries the scheme its own name in the
+ *   shipped file carries (Shop on `http`, ShopSecure and the account/purchase/
+ *   review/telemetry bases on `https`, both CDNs on `http`), because the setting is
+ *   what decides the transport, not the request that happened to fetch it. F-039 is
+ *   the hour this function spent deriving them from the arrival scheme instead:
+ *   an `https` arrival answered `WPAppsMarketplaceShopSecure` with `http://`, i.e.
+ *   a plaintext base under the name the client uses for the secure one.
  * @param {string} [options.mpcVersion] the `mpcVersion` the client asked with.
  * @param {Date} [options.now]
  * @returns {string} XML
  */
 export function buildStoreConfiguration({
   storeType = 'MOStore', storeId = '', cc = 'IT', lang = 'it-IT',
-  scheme = 'http', host = 'marketplaceedgeservice.windowsphone.com',
+  host = 'marketplaceedgeservice.windowsphone.com',
   mpcVersion = '8.10', now = new Date(),
 } = {}) {
-  const secure = scheme === 'http' ? 'https' : 'http';
   const lines = [];
   // A service base carries `nexus=` in the shipped file; a store setting does not.
   // Both spellings are copied from it rather than unified, because a normalised
@@ -852,18 +876,20 @@ export function buildStoreConfiguration({
   const value = (id, written) => lines.push(`\n      <setting id="${id}">${text(written)}</setting>`);
 
   // Where the page, the list, the images and the update check come from. The host
-  // is the one the request arrived on, so the client keeps talking to this lab…
-  base('WPAppsMarketplaceShop', `${scheme}://${host}/`);
-  base('WPAppsMarketplaceShopSecure', `${secure}://${host}/`);
-  base('WPAppsMarketplaceBuy', `${secure}://${host}/`);
-  base('WPAppsMarketplaceAccounts', `${secure}://${host}/`);
-  base('WPAppsMarketplaceReview', `${secure}://${host}/`);
-  base('WPAppsMarketplaceTelemetry', `${secure}://${host}/`);
+  // is the one the request arrived on, so the client keeps talking to this lab;
+  // the scheme is the shipped file's, per setting, so a base keeps meaning what its
+  // name says whichever listener the client happened to use (F-039).
+  base('WPAppsMarketplaceShop', `http://${host}/`);
+  base('WPAppsMarketplaceShopSecure', `https://${host}/`);
+  base('WPAppsMarketplaceBuy', `https://${host}/`);
+  base('WPAppsMarketplaceAccounts', `https://${host}/`);
+  base('WPAppsMarketplaceReview', `https://${host}/`);
+  base('WPAppsMarketplaceTelemetry', `https://${host}/`);
   // …and the two CDNs are named, not derived: a CDN base built as `cdn.<ip>` is a
   // hostname no resolver can answer, and these two are the names `config.json`
   // already hijacks (`*.marketplaceedgeservice.*`, `*.marketplaceimages.*`) and the
   // ones the shipped file itself supplies for this family.
-  base('WPAppsMarketplaceShopCdn', `${scheme}://cdn.marketplaceedgeservice.windowsphone.com/`);
+  base('WPAppsMarketplaceShopCdn', 'http://cdn.marketplaceedgeservice.windowsphone.com/');
   base('WPAppsMarketplaceImageService', 'http://cdn.marketplaceimages.windowsphone.com/');
 
   // The store family: the settings the shipped file does *not* carry, which is why

@@ -35,7 +35,7 @@ import { describeDirectHandshakeFailure } from '../src/proxy.mjs';
 import { StoreRouter } from '../src/store/router.mjs';
 import { buildHandlers } from '../src/store/handlers.mjs';
 import { buildStorePageFeed, buildApplicationListFeed, buildProductUpdatesResponse, uuidForApp, uuidForCollection, categoryId, normalizeVersion, findAppByUuid, isUuid, normalizePageFormat, ATOM_NS, CATALOG_NS } from '../src/store/catalog-feed.mjs';
-import { pageSections, applyPageMutation } from '../src/store/protocol.mjs';
+import { pageSections, applyPageMutation, resolveDataSourceType } from '../src/store/protocol.mjs';
 import { collect, coverage, findFirst, pathsUnder, verdictOf } from '../src/store/page-frame.mjs';
 import {
   DEFAULT_TEMPLATE_TYPE, TEMPLATE_GRAMMAR, TEMPLATE_TYPES, PAGE_TYPES, PAGE_PARSE_PATHS,
@@ -1425,6 +1425,21 @@ async function main() {
       && /<setting id="WPAppsMarketplaceImageService"[^>]*>http:\/\/cdn\.marketplaceimages\.windowsphone\.com\//.test(oemText)
       && !/cdn\.127\.0\.0\.1/.test(oemText),
     oemText.split('<setting').find((line) => line.startsWith(' id="WPAppsMarketplaceShopSecure"')) || 'missing');
+  // The schemes belong to the setting, not to the listener the request arrived on.
+  // This is the same document fetched over TLS, and before F-039 it answered
+  // `WPAppsMarketplaceShopSecure` with `http://` - a plaintext base under the name
+  // the client uses for the secure one, on the one path no probe covered.
+  const secureConfig = await probeRouter.handle(
+    { ...configCtx, scheme: 'https', port: 443 }, { config, logger, zinc: null },
+  );
+  const secureText = String(secureConfig?.body || '');
+  check('store protocol: a configuration fetched over TLS keeps every base on its own scheme',
+    /<setting id="WPAppsMarketplaceShopSecure"[^>]*>https:\/\/127\.0\.0\.1\/<\/setting>/.test(secureText)
+      && /<setting id="WPAppsMarketplaceShop"[^>]*>http:\/\/127\.0\.0\.1\/<\/setting>/.test(secureText)
+      && /<setting id="WPAppsMarketplaceShopCdn"[^>]*>http:\/\/cdn\.marketplaceedgeservice\.windowsphone\.com\//.test(secureText)
+      && secureText === oemText,
+    secureText.split('<setting').find((line) => line.startsWith(' id="WPAppsMarketplaceShopSecure"')) || 'missing');
+
   // The values are still this lab's answers for a service that no longer exists,
   // and the capture has to say so: no archived or on-device capture of this
   // endpoint exists, so a reader who took the body for ground truth would be
@@ -1859,6 +1874,42 @@ async function main() {
       `off=${home.headers['x-lab-pane-background']} on=${artPage.headers['x-lab-pane-background']}`
         + ` blocks=${artBlocks.length}/${sections.length} distinct=${artIds.size}`);
 
+    // `/Panes/Pane` is an absolute path and the page document has two roots it can
+    // be read from: the page's own and the feed nested inside it. Every delivery so
+    // far put the panes under the page root; `panesInFeed` moves them inside the
+    // feed and nothing else, so the check is a move and not a rewrite: the set of
+    // panes and their content must be the same in both arms, only their parent
+    // differs, and the header has to say which arm a delivery is.
+    const paneCount = (body) => (body.match(/<Pane>/g) || []).length;
+    // Placement is a position, not an adjacency: the feed carries its own link,
+    // updated, title and impression before anything else, so the question is only
+    // whether `<Panes>` fell inside the feed element or stayed beside it.
+    const underPageRoot = (body) => {
+      const root = body.indexOf('<StorePage');
+      const panes = body.indexOf('<Panes>');
+      const feed = body.indexOf('<a:feed');
+      return root !== -1 && panes > root && (feed === -1 || panes < feed);
+    };
+    const underFeed = (body) => {
+      const feed = body.indexOf('<a:feed');
+      const close = body.indexOf('</a:feed>');
+      const panes = body.indexOf('<Panes>');
+      return feed !== -1 && close !== -1 && panes > feed && panes < close;
+    };
+    config.livestore.protocol.panesInFeed = true;
+    const feedPanes = await httpsViaProxy({ ...target, requestPath: storeQuery, method: 'GET' });
+    config.livestore.protocol.panesInFeed = false;
+    check('store protocol: the panes sit under the page root when off and inside the feed when on',
+      underPageRoot(home.body)
+        && home.headers['x-lab-pane-placement'] === 'page'
+        && underFeed(feedPanes.body)
+        && !underPageRoot(feedPanes.body)
+        && feedPanes.headers['x-lab-pane-placement'] === 'feed'
+        && paneCount(home.body) === sections.length
+        && paneCount(feedPanes.body) === paneCount(home.body),
+      `off=${home.headers['x-lab-pane-placement']} on=${feedPanes.headers['x-lab-pane-placement']}`
+        + ` panes=${paneCount(home.body)}/${paneCount(feedPanes.body)}`);
+
     // A pane with no data source is a pane the client downloads nothing for: the
     // binary reads /DataSource/Type and /DataSource/Url per pane and fetches the
     // content from there (@46528, next to /StorePage, /feed, /entry). So the page
@@ -1873,6 +1924,25 @@ async function main() {
         && sourceUrl.searchParams.get('category') === sections[0].title
         && home.headers['x-lab-pane-sources'] === 'Applications',
       sourceUrl ? `${sourceMatch[1]} -> ${sourceUrl.pathname}${sourceUrl.search}` : 'no data source in the page');
+    // A misspelt data source type used to be the quietest thing in this lab: the
+    // pane was written as the fallback, the page looked ordinary, and the operator
+    // read a capture as if the value they armed had been served. The resolver now
+    // returns the substitution instead of hiding it, and the delivery names it in a
+    // header - so three checks, because the halves fail separately.
+    const knownSource = resolveDataSourceType('Applications');
+    const typoSource = resolveDataSourceType('Applicatons');
+    check('store protocol: a data source type the client has a parser for is served as written',
+      knownSource.type === 'Applications' && knownSource.substituted === false,
+      `${knownSource.type} substituted=${knownSource.substituted}`);
+    check('store protocol: an unknown data source type falls back and says it did',
+      typoSource.type === 'Applications'
+        && typoSource.substituted === true
+        && typoSource.requested === 'Applicatons',
+      `${typoSource.requested || '(empty)'} -> ${typoSource.type} substituted=${typoSource.substituted}`);
+    check('store protocol: a delivery with the armed value present claims no substitution',
+      home.headers['x-lab-data-source-substituted'] === undefined,
+      `header=${home.headers['x-lab-data-source-substituted'] ?? '(absent)'}`);
+
     const sourceFeed = sourceUrl
       ? await httpsViaProxy({ ...target, requestPath: `${sourceUrl.pathname}${sourceUrl.search}`, method: 'GET' })
       : { status: 0, headers: {}, body: '' };
@@ -2001,10 +2071,10 @@ async function main() {
     // 4 rule cases + 1 plain-HTTP case + 1 direct-TLS case + 5 store-handler
     // cases + 12 store-protocol cases + 1 fetched pane source. The extra
     // store-protocol cases are the ones fetched with an experiment armed - the pane
-    // background page and the media-instance detail, list and page - because the wire
-    // is the only place a config value can be shown to have arrived.
+    // background page and the media-instance detail, list and page - because the wire     // is the only place a config value can be shown to have arrived, and the
+     // thirteenth is the same page fetched with the panes moved inside the feed.
     check('capture: every intercepted exchange was indexed',
-      indexLines.length === 23,
+      indexLines.length === 24,
       `entries=${indexLines.length} decisions=${JSON.stringify(decisions)}`);
     check('capture: decisions are labelled per rule',
       decisions.some((d) => d === 'passthrough:passthrough-endpoint')
@@ -2014,10 +2084,11 @@ async function main() {
       JSON.stringify(decisions));
     check('store: handler decisions are labelled with the handler name',
       decisions.includes('store:store-health') && decisions.includes('store:catalog-bridge')
-        // Twelve page/feed/detail requests - four of them fetched with an experiment
-        // armed - plus the pane source the page itself named, which the suite fetched
-        // back through the proxy the way the device would.
-        && decisions.filter((d) => d === 'store:store-protocol').length === 12,
+        // Thirteen page/feed/detail requests - five of them fetched with an experiment
+        // armed, the fifth being the page with the panes inside the feed - plus the
+        // pane source the page itself named, which the suite fetched back through the
+        // proxy the way the device would.
+        && decisions.filter((d) => d === 'store:store-protocol').length === 13,
       JSON.stringify(decisions.filter((d) => d.startsWith('store:'))));
     const firstCapture = indexLines[0];
     check('capture: request and response bodies are stored',

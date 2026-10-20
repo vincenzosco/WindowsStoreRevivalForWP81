@@ -52,12 +52,21 @@ import {
  * The data source type to write, or the one this lab serves when config names
  * something the client has no parser for. A typo must not become a pane pointing
  * at a download the client cannot read, so an unknown name reads as the type that
- * is served and is logged where it happens.
+ * is served - and *says* it was substituted, in a response header and in the log.
+ *
+ * Returning only the string was the defect this function was rewritten to remove:
+ * the comment above promised a log line that no caller wrote, so a misspelt
+ * `dataSourceType` in `config.json` served a perfectly ordinary page and nothing
+ * anywhere recorded that the value the operator armed is not the value the pane
+ * carries. That is the failure mode this project spends its rules on - an
+ * experiment silently reading as a different experiment - so the substitution is
+ * part of the return value, not a note in a comment.
  */
-function dataSourceType(value) {
-  const wanted = String(value ?? '').trim();
-  const known = DATA_SOURCE_TYPES.find((entry) => entry.type.toLowerCase() === wanted.toLowerCase());
-  return known ? known.type : DATA_SOURCE_TYPES[0].type;
+export function resolveDataSourceType(value) {
+  const requested = String(value ?? '').trim();
+  const known = DATA_SOURCE_TYPES.find((entry) => entry.type.toLowerCase() === requested.toLowerCase());
+  if (known) return { type: known.type, requested, substituted: false };
+  return { type: DATA_SOURCE_TYPES[0].type, requested, substituted: true };
 }
 
 function protocolSettings(config) {
@@ -68,6 +77,12 @@ function protocolSettings(config) {
     templateType: DEFAULT_TEMPLATE_TYPE,
     templateTypeForm: 'both',
     pageFormat: 'storePage',
+    // Where the panes sit inside a page document: `false` under the page root
+    // (`<StorePage><Panes>`), `true` inside the feed (`<StorePage><a:feed><Panes>`).
+    // `/Panes/Pane` is an absolute path and the document has two roots to read it
+    // from; every delivery so far has been the first, and this is the second, which
+    // is one position and nothing else. Off by default for that reason.
+    panesInFeed: false,
     // A pane that names a data source is a pane the client downloads content
     // for; a pane that does not is a pane with nothing to fetch. Off by default,
     // because it is the page this lab served before, and armed from config.
@@ -458,7 +473,6 @@ export function createStoreProtocol(config) {
           storeId,
           cc: url.searchParams.get('cc') || 'IT',
           lang: url.searchParams.get('lang') || 'it-IT',
-          scheme: ctx.scheme,
           host: ctx.host,
           mpcVersion: url.searchParams.get('mpcVersion') || '8.10',
           now,
@@ -603,8 +617,13 @@ export function createStoreProtocol(config) {
         // on this device, and a source URL that disagreed with it would be a
         // second variable inside the same change.
         const lang = url.searchParams.get('lang') || 'en-US';
-        const dataSource = settings.dataSource ? {
-          type: dataSourceType(settings.dataSourceType),
+        const dataSourceType = settings.dataSource ? resolveDataSourceType(settings.dataSourceType) : null;
+        if (dataSourceType?.substituted) {
+          logger.warn(`store protocol: dataSourceType "${dataSourceType.requested}" is not one of `
+            + `${DATA_SOURCE_TYPES.map((entry) => entry.type).join(', ')}; serving ${dataSourceType.type}`);
+        }
+        const dataSource = dataSourceType ? {
+          type: dataSourceType.type,
           maxItems: settings.pageSize,
           minItems: 1,
           urlFor: (section) => {
@@ -634,6 +653,7 @@ export function createStoreProtocol(config) {
           paneSubType: settings.paneSubType,
           paneBackgroundImage: Boolean(settings.paneBackgroundImage),
           offerMediaInstance: Boolean(settings.offerMediaInstance),
+          panesInFeed: Boolean(settings.panesInFeed),
           now,
         });
         // The probe: the same page, one construct renamed. Refused rather than
@@ -660,6 +680,16 @@ export function createStoreProtocol(config) {
           'x-lab-template-type': String(settings.templateType),
           'x-lab-template-types-known': templateTypesForPageType(pageType).join(',') || 'none',
           'x-lab-pane-sources': dataSource ? dataSource.type : 'none',
+          // Named only when it happened, so the absence of the header is the
+          // statement "the armed value is the value served".
+          ...(dataSourceType?.substituted
+            ? { 'x-lab-data-source-substituted': dataSourceType.requested || '(empty)' }
+            : {}),
+          // Which of the two roots this delivery put the panes under, so a capture
+          // can never be read as the wrong arm.
+          'x-lab-pane-placement': normalizePageFormat(settings.pageFormat) === 'atom'
+            ? 'none'
+            : (settings.panesInFeed ? 'feed' : 'page'),
           'x-lab-pane-type': String(settings.paneType || '').trim() || 'none',
           // Which of the pane's fields this delivery carried, so an experiment can never
           // be read off a capture that does not say what was armed.

@@ -30,7 +30,9 @@
 // never read as "the real CDN answered".
 //
 // The other half of that session is deliberately NOT answered here: `/v8/catalog/queries`
-// (the search-box suggestions) and `/v8/catalog/appCategories/<category>` still fall
+// (the suggestion download - `PendingSuggestListDownload` in the client, with its own
+// `ApplicationSuggestions` feed type and a query that names albums, artists, tracks and
+// podcasts beside applications; F-040) and `/v8/catalog/appCategories/<category>` still fall
 // through to `502`. No capture of either document exists, their grammar would have to
 // be invented, and an invented document is a second variable in the same run - which
 // is how E-004 earned its note.
