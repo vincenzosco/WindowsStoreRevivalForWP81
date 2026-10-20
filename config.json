@@ -86,7 +86,7 @@
   "livestore": {
     "_comment": "Zinc API (Live Store Public API). Get a key from the One Live Developer Centre, app for the Live Store realm.",
     "baseUrl": "https://zinc.onelive.me/v1",
-    "apiKey": "REDACTED-ZINC-API-KEY",
+    "apiKey": "",
     "cacheTtlMs": 300000,
 
     "_comment_protocol": "Answers the Store endpoints the phone itself calls (the storePages home page, the hub pages, the application lists) with the Zune catalog XML it reads. The backend behind those names is gone - the CDN answers 503 and the other hosts do not resolve - so the page has to be served, not relayed.",

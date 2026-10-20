@@ -32,7 +32,7 @@ same event appears as `17:56:07` local and `15:56:07Z`.
 | The served response that file matches | `bodies/0117-res.bin`, 55234 bytes, SHA-256 `38E904A1F685AE9F9E1B71DF3B809A951D798BD5461E604FDCBBBD1355ED4FBE` — the delivery at `2026-10-15T18:47:27.289Z` | `captures/session-2026-10-15_15-36-48/index.jsonl` + `bodies/`, `sha256sum` |
 | What the device wrote about the Store in the whole session | **one** file — the cached page above. 84 files under `Data` since 17:00, 18 past the hive/telemetry/ETW filter, 1 of them Store-related | elevated readout, 2026-10-15 21:05 |
 | Page built today from the fixture | 29893 bytes, identical except `<a:updated>` | `npm run store:page`, `.selftest/cmp.fresh.txt` |
-| Checks in the suite | 161, all passing | `npm run selftest`, 2026-10-20 (155 before F-037 to F-041 added six) |
+| Checks in the suite | 169, all passing | `npm run selftest`, 2026-10-20 (155 before F-037 to F-041 added six; four with F-044, two with F-046, one with F-048, one with F-049) |
 | Exchanges in `captures/` | 487 480 over 28 sessions, of which **109 are a device's** - 99.98 % of the index is this PC | `npm run analyze -- --all-sessions`, 2026-10-16 |
 | DNS records in the same capture | 19 615 from 21 addresses, and only **8 639** are this PC's - a `.151` that asks for `a.root-servers.net` 6 437 times, not the phone | same command |
 | Devices the requests identify in that capture | **two** handsets: `x-wp-device-id 40752FED…5A1872` (the one above) and `3499541B…EEA32B`, `os=8.10.14226.0`, `dm=RM-941_eu_hungary_356`; the two overlap for 2 h 38 m on 2026-10-15 | same command |
@@ -2203,3 +2203,710 @@ Each one changes **a single variable**, and each names the value it replaced so 
   the ones a device meets, or which host `GetWpnPhoneRegistrationEndpoint` returns - that is a runtime answer and
   this is a byte search of a build. Nor that this build is the handset's: the phone runs `8.10.14219.0`, the
   image is `3058.50000.1445.1005`, and a vocabulary can differ between them.
+
+## F-043 The pane kind is not one of the client's object codes, and the app list stopped being drawn the evening the entry shape changed
+
+**PARTLY WITHDRAWN by F-045**: the regression reading in this entry does not survive the byte comparison - the document that drew on
+2026-10-17 already carried `<k>` and no bare `<title>`, which is the shape the lab serves again. The `col` negative stands.
+
+- **Date** 2026-10-20 13:53-13:58 local (11:53-11:58Z) · **Area** the pane's kind, and the application list · **Method** one
+  device run with `paneType: col` armed, the delivery verified from this PC before the open (8 panes with `<Type>col</Type>`,
+  `x-lab-pane-type: col`, `content-length: 58427`), then the session read from its own index:
+  `captures/session-2026-10-20_08-41-48/index.jsonl`, 31 exchanges, all from `192.168.0.136`.
+- **Measured: `col` is negative** Three page deliveries - `11:53:33`, `11:55:28`, `11:57:31Z`, one per Store open - each `200`,
+  and **zero** requests carrying `chunkSize=25` or `category=`. The only pane-source-looking markers in the session are the search
+  feed's own `chunksize=4`, which is F-036's typing, not a pane. So three tokens have now been put in the field the pane's own map
+  calls its kind - `inv`, `Collection`, `col` - and the client has not built a list from any of them. `app`, `fea` and `sto` are the
+  three left in the client's object-code table, and nothing read so far prefers one.
+- **Measured: the application list is not being drawn at all, and the search is where it shows** `/v9/catalog/apps?…&chunkSize=50&q=f`
+  answered `200` with **17** applications (22 636 bytes, `x-lab-apps: 17`) at `11:53:41` and again at `11:58:00`, and in the whole
+  session the handset asked for **zero** `icon_small` images - one `icon_large` for the detail page it opened (`9353589b…`,
+  `11:53:45`) is the entire image traffic. On 2026-10-17 the same endpoint with the same 17 apps produced **240** icon requests within
+  a second (F-031). A list that requests no art for 17 rows is a list whose rows were never built, which is what the empty blue screen
+  is made of.
+- **The regression window, and it is two minutes wide** Commit `e10db61` (2026-10-17 16:32 local) took the bare `<title>` out of every
+  application entry (`appListEntryTitle: false`) and put `<k>` in (`appListRank: 4`); F-031's image arming was at 16:30. Every list
+  served after that commit has been drawn blank, and F-035 read the missing art as the cost of `offerMediaInstance` - which is
+  **off** in this session (`x-lab-offer-media-instance: none`) and the art is still absent. F-035's suspicion does not survive this
+  reading, and neither does the idea that the list was ever fine after the entry shape changed.
+- **Armed: `appListEntryTitle: true` alone** `appListRank` stays at 4, so one half of that commit moves. Verified from this PC before
+  the open: every entry carries `<title>` again (23 130 bytes, +494 over the 17 rows), header `x-lab-applist-entry-title: yes`. The
+  reading is the same search and it is self-observing: 17 `icon_small` requests mean the row was built and the bare title was the
+  gate; none means it was the `<k>`, and the next arm is `appListRank` back to `""`.
+- **Also measured, and the lab answers with 502** `/v8/catalog/queries` ×16 and `/v8/catalog/appCategories/windowsphone.Social` ×4.
+  Both are known fall-throughs (F-031's note), but this is the first session where the category one sits on the path a finger took:
+  five detail fetches at `11:53:44`-`11:53:47` and then the category feed, four times, refused. Whatever the handset draws for that
+  refusal is on screen, and the page it leaves is the empty blue one.
+- **A diagnostic that had stopped matching the server** `tools/store-page.mjs` passed four options fewer than the handler does - no
+  `dataSource`, `paneType`, `paneSubType`, `paneBackgroundImage` - and so printed panes carrying neither `<Type>` nor `<DataSource>`:
+  a document the lab has never served. Corrected the same day and compared byte for byte against the live delivery (58 427 = 58 427,
+  identical except `<a:updated>` and `impressionId`), and the tool now prints the pane type and source it built. It is not yet covered
+  by a suite check - the comparison above is the evidence, not a test.
+- **Does not establish** That the rows are missing rather than invisible: zero image requests say no row was built to draw, not why.
+  Nor that the bare `<title>` is what the client reads - that is what the armed value is for. And it does not close the pane kind:
+  three values tried is three values, and the field may carry something that is not a code from that table at all.
+- **Undo** `appListEntryTitle` back to `false`, `paneType` back to `Collection`, then `POST /__lab/reload`.
+
+## F-044 The two requests a finger makes are answered now, and the list is back to the shape that drew
+
+**PARTLY WITHDRAWN by F-045**: the two endpoints and the search filter stand and are covered by four checks; the paragraph that
+restores the entry shape was aimed at the wrong document and the values are back where they were (`appListRank: 4`,
+`appListEntryTitle: false`), which F-045 shows is byte-identical to the 2026-10-17 delivery.
+
+- **Date** 2026-10-20 14:04 local · **Area** `src/store/protocol.mjs`, `config.json` · **Method** F-043's session re-read
+  route by route against `ROUTES`, then each path driven from this PC with the phone's own query string and the reply read
+  header by header; suite run after every change.
+- **The one that was a refusal, not a wrong document** `/v8/catalog/appCategories/<id>` matched no route, so the relay resolved the
+  hijacked name back to this process and answered `502 upstream_loop` - four times in F-043's session, on the path a finger took
+  after five detail fetches. It is the application list the lab already serves, filtered by the category id the client named
+  (`windowsphone.Social`), matched through the same name→id table the entries are written with (`categoryId` in
+  `catalog-feed.mjs`), so a category cannot be called one thing in an entry and another in a route. Verified from this PC:
+  `200`, `x-lab-protocol: appCategories`, `x-lab-category-id: windowsphone.Social`, `x-lab-apps: 2`, the two social apps in the
+  body and neither of the others; an id nobody carries answers `200` with `x-lab-apps: 0` and a well-formed feed, because an
+  empty category is a fact and a `404` would be this lab's opinion.
+- **The one that was a lie** `/v9/catalog/apps?…&q=f` - the client's own `ApplicationSearch` endpoint (F-041) - was answered with
+  the whole catalog: `x-lab-apps: 17` for a query that names three entries. A search that returns everything is indistinguishable
+  from no search, on the screen and in a capture. `q` now filters on title, sort title and tags; **not** on publisher, because every
+  fixture entry is published by "Lab Fixture" and the first version of this filter answered `f` with all 17 - caught in the same
+  minute by the count, which is why the count is a response header. Verified: `q=f` → 3 (`Filodiretto`, `Spesa in Fila`, `Favole a
+  letto`), `q=zzzz` → 0 with a well-formed feed, no `q` → 17 and `x-lab-query: none`.
+- **The list is back to the 2026-10-17 shape** `appListRank` is `""` and `appListEntryTitle` is `true` again - no `<k>`, the bare
+  `<title>` present - which is byte-for-byte the document that produced 240 icon requests on 10-17 at 16:30, before commit
+  `e10db61` (16:32) changed it. F-043's first arm moved only the title and the screen stayed empty; both halves are reverted here
+  because the commit changed both at once, and a document that never existed on a working service is not the thing to compare
+  against. Verified from this PC: 23 005 bytes, `x-lab-applist-rank: none`, `x-lab-applist-entry-title: yes`.
+- **Suite** 165/165, exit 0, with four checks new: a category chip is answered with the apps that carry it; a category nobody
+  carries is an empty list and not a refusal; a search answers with the entries that match and not the catalog; a search with no
+  match is empty while no query is the whole list. The third and fourth are the pair that matters - a filter that returned nothing
+  would pass the third alone.
+- **Does not establish** That the screen changes: every check above is this PC talking to this lab. The category reply is a list
+  the client has never been handed on that path, and whether it draws rows is a device reading. Nor is the hub page touched: the
+  page still parses into a model that draws its background and no panes, and that remains F-037's open question with two candidates.
+- **Undo** `git revert` for the route and the filter; `appListRank` back to `4` and `appListEntryTitle` back to `false` for the
+  entry shape - one value each, and every delivery before this entry is then comparable again.
+
+## F-045 The document that drew the list in October is the one the lab serves now, byte for byte, and the metric that said otherwise was the client's image cache
+
+- **Date** 2026-10-20 14:05-14:10 local · **Area** the application list, and two entries written an hour earlier · **Method** the
+  response the handset received on 2026-10-17 at `14:21:34Z` (`captures/session-2026-10-17_14-17-31/bodies/0016-res.bin`,
+  22 636 bytes - the delivery that was followed within a second by 240 `icon_small` requests) compared byte for byte with what this
+  lab answers now for the same request, normalising only the clock (`<a:updated>`), the impression id, the date inside the feed id
+  and the `&q=f` of the self link.
+- **Measured: identical** 20 833 characters of each, equal. 22 628 bytes against 22 636, the 8 bytes being the `q=f` in the self
+  href. So the entry shape the lab serves today - `<k>` present, no bare `<title>` (`appListRank: 4`, `appListEntryTitle: false`) -
+  **is** the shape that drew 17 rows on 10-17. Nothing about the entry changed, and nothing about the entry can be the reason a
+  screen is empty.
+- **What that withdraws, stated plainly** F-043 read commit `e10db61` (10-17 16:32) as the regression that stopped the list being
+  drawn, and F-044 restored an earlier shape on that reading. Both are wrong: the `14:21Z` delivery already carried `<k>` and no
+  bare `<title>`, so the document that drew is the document the commit produced. The second arm - `appListEntryTitle: true`, tried
+  on the handset at `11:59Z` because the first one did not change the screen - is likewise withdrawn, and the values are back where
+  the config had them.
+- **The measurement that misled, and why** "the client asked for zero icons" was read as "no row was built". It cannot carry that:
+  the client caches image bytes by guid, and the placeholder for those 17 guids had already been fetched on 10-17 and again on
+  10-20 at `04:50`. A list that is drawn from cache asks for nothing, and so does a list that is not drawn - the two are the same
+  number. The same flaw sits under F-035's conclusion that `offerMediaInstance` cost the list its art: that field is off, the
+  document is the one that drew, and the request count is still zero. **A request count on a cached resource is not evidence of
+  rendering**, and this register had been using it that way.
+- **What is left of the list problem, then** Either the list is drawn and the screen the operator called "azure" is another screen,
+  or the list is not drawn for a reason no response body here can show - and the next reading is the device's, not a document: one
+  search with the lab answering exactly the 10-17 bytes, and the screen described before and after.
+- **Does not establish** That the list is drawn today. It establishes that the bytes are the ones that drew once, which is the
+  strongest statement a response can make about itself. Nor does it say anything about the hub page: no document of this project
+  has ever been followed by a request, and the pane question stays where F-037 left it.
+- **Undo** Nothing to undo: `appListRank: 4` and `appListEntryTitle: false` are the values the config carried before F-043/F-044,
+  and the comparison above is why.
+
+## F-046 The list drew, the icons did not, and the detail page was titled with the list's own placeholder
+
+- **Date** 2026-10-20 14:20 local (12:19-12:20Z) · **Area** the application list's art, the app detail's title · **Method** one
+  device run against the lab as F-045 left it (17-entry list byte-identical to the 10-17 delivery, `appCategories` new, `q`
+  filtering), read from `captures/session-2026-10-20_12-04-33/index.jsonl` - 37 exchanges - and from what the operator reported
+  seeing on the handset.
+- **Measured: the list draws, so the document was never the problem** Search for `f` showed **three rows** in the Store, which is
+  the reply `q=f` now returns (`Filodiretto`, `Spesa in Fila`, `Favole a letto`). With F-045's byte identity this closes the
+  question the last two entries spent themselves on: the list endpoint was correct all along, and the empty blue screen was either
+  another screen or a search that returned entries the screen did not draw for its own reasons.
+- **Measured: the category path is answered and used** `/v8/catalog/appCategories/windowsphone.Social` was answered `200` at
+  `12:20:16Z` - the first `200` this path has ever had - and the operator opened the app's **related** list and saw other
+  applications in it. So the route works end to end: request, reply, rendered list. What used to be four `502`s in a row is now a
+  screen with content.
+- **Measured: no logo, and no image request at all** In the whole session there are **zero** requests to
+  `cdn.marketplaceimages.windowsphone.com`, while three rows were drawn. So the client is drawing icon slots it does not ask this
+  lab to fill. The one explanation that fits the history is its own cache: it stores an image under the guid it was asked for and
+  does not ask again, and the 17 guids this lab mints were first requested on 2026-10-17, when the CDN was still being answered
+  `502` (F-031) - so what the handset holds under them is a failure, and no later bitmap can change what it draws under a guid it
+  will not re-request.
+- **The lever, and why only the art moves** `livestore.protocol.imageSalt`, armed as `r2`: `uuidForImage`, `uuidForBackground` and
+  `uuidForEditorial` derive from the salted name, and `uuidForApp` / `uuidForCollection` do not - the client names an application
+  back to this lab by its own guid (`/v9/catalog/apps/<guid>`) and a collection by the one its pane holds, so moving those would
+  break the routes that work in order to fix the ones that do not. Verified from this PC: the same three rows now carry
+  `5c7ad249…`, `74697f3b…`, `03912dd4…`, none of them a guid this lab has ever served before; clearing the salt restores every
+  earlier guid (`setImageSalt('')` is in the suite as a check).
+- **Measured: the detail screen's title was a placeholder** The operator reported **"List Of Items"** as the heading over
+  Filodiretto's own page. That string is `buildApplicationListFeed`'s *feed* title default, and the screen reads the feed's
+  `<a:title>`, not the entry's - which was already the app's name. The detail route now titles the feed with the app's name.
+  Verified from this PC: `Filodiretto` in both places, and a check asserts the feed title against the fixture entry so the
+  placeholder cannot come back.
+- **Suite** 167/167, exit 0, two checks new: an app detail page is titled with the app and not with the list placeholder; the image
+  salt moves the art guids and leaves the app guids where they were, clearing it restoring the original.
+- **Does not establish** That the handset will draw the icons from the new guids: that is the next device reading, and the
+  mechanism it tests (a cache that never re-asks) is inferred from a request count of zero plus a history of `502`s, not from the
+  cache itself. Nor does it say anything about the home page, which is unchanged and still draws nothing.
+- **Undo** `imageSalt: ""` restores every guid; the detail title is one argument in `src/store/protocol.mjs`.
+
+## F-047 The marked placeholder draws once the guid is new, so the cache is the mechanism - and the same lever is now on the pane's own art
+
+- **Date** 2026-10-20 14:25 local · **Area** the art the client draws, and the one question the home page has never answered · **Method**
+  one device run with `imageSalt: "r2"` armed, the delivery verified from this PC first (three rows carrying `5c7ad249…`,
+  `74697f3b…`, `03912dd4…`, none servable before), then what the operator saw on the handset.
+- **Measured: the placeholder appears** With fresh guids the search list drew **the marked square - dark field, light frame, diagonal
+  cross** - where before it drew nothing at all. That is the PNG this lab serves (`x-lab-image-shape: 48x48 field+frame+X`, 279 bytes),
+  so the client: asked for an image it had never asked for, took the reply, and drew it. The reading of the empty slot is now settled:
+  the client caches an image **by guid and does not re-ask**, and the guids this lab minted before had first been answered `502`
+  (F-031), so what it held under them was a failure. F-046's inference is now a measurement.
+- **What that retires** The art is no longer a hypothesis to test: an image this lab mints is drawn, and the only thing that ever
+  stopped it was a guid the client had already answered for itself. `offerMediaInstance` is not implicated in any of it, and neither
+  is the entry shape.
+- **Armed now: the pane's own background art** `paneBackgroundImage: true`, so every one of the eight panes carries
+  `/BackgroundImage/id` - the one path of the pane's field map that a hub tile would draw with, minted through the salted
+  derivation (`d5ad4b82…`, `01a01e1e…`, `3f8d6b1f…`, …). Verified from this PC: the page carries **8** of them, `content-length:
+  59139`, header `x-lab-pane-background: guid`, and the image endpoint answers each with the marked PNG
+  (`200`, `image/png`, `x-lab-image: placeholder`).
+- **Why this is the reading and not another content guess** It is the first experiment in this project on the home page whose answer
+  is **self-observing**: a client that walks `/Panes` at all must fetch the art those panes name, and a client that never reaches the
+  panes cannot. So the capture answers F-037's open question in either direction, without anyone reading the screen - eight image
+  requests mean the pane model is built and the emptiness is in the pane's contents; zero means the client never walks the block, and
+  the page's frame is wrong in a way no served document has yet varied.
+- **Does not establish** That a pane's background draws, or that the hub gains rows. A request for the art says the pane was read; it
+  does not say the pane was rendered. And a 48x48 placeholder stretched into a background slot is what would be seen if it does - not
+  artwork, and not a claim about how the real service filled that field.
+- **Undo** `paneBackgroundImage: false` (the page returns to 58 427 bytes), and `imageSalt: ""` to restore every earlier guid.
+
+## F-048 The client never walks the pane block at all, and the two sources that name it disagree
+
+- **Date** 2026-10-20 14:26-14:37 local (12:26-12:37Z) · **Area** the home page's frame, and the question F-037 left open · **Method** one
+  device run with `paneBackgroundImage: true` (eight panes, each naming its own art under salted guids), then the capture read
+  request by request; then the other element spelling served and verified from this PC.
+- **Measured: the pane block is not read** `captures/session-2026-10-20_12-22-53/index.jsonl`, 19 exchanges from `192.168.0.136`, the
+  page delivered **three times** (`12:32:55`, `12:33:34`, `12:36:30Z`, each `200`, `content-length: 59139`, `x-lab-pane-background:
+  guid`) and the handset requested **none** of the eight background images. The only art it fetched all session is the three app
+  icons of the search list (`5c7ad249…`, `74697f3b…`, `03912dd4…`) and one repeat of the first on the detail page - all of them from
+  the application list, none from the page. A client that walked `/Panes` would have had to fetch what those panes name; it did not
+  fetch a single one. So the pane model is not built, and **every served-pane hypothesis since F-032 has been asking a question about
+  a subtree the client never enters**.
+- **What that converts into** The failure is in the page's *frame* - the elements that lead a reader to the panes - and not in what a
+  pane carries. `paneType`, `CollectionId`, `DataSource`, `MaxItems`, `SubType`, the placement of the panes, and whether a pane holds
+  items or a reference are all inside the block the client skips: no value there can be the answer, which is why five of them have been
+  read as negatives.
+- **The two sources, and the one that has not been tried** The parser's path table says `/Panes/Pane` and `/Templates/Template`
+  (handset module, 69 asserted offsets) - the spelling every page in this project has carried. The retail build's type table (F-041)
+  lists `StorePage Panes StorePane Templates StoreTemplate GetObjects …` - `StorePane` and `StoreTemplate` beside the root. One of the
+  two must be the names that reader walks, and only the first has ever been served. An element the reader does not find is not an
+  error it reports: it is an empty model, which is exactly the silence on this screen.
+- **Armed: `pageElements: "typetable"`** `<StorePane>` and `<StoreTemplate>` in place of `<Pane>` and `<Template>`, and **nothing else** -
+  same panes, same field order, same `<Type>`, `<DataSource>`, `<BackgroundImage>`, same template type `003`, same feed underneath.
+  Verified from this PC: the page carries **8** `<StorePane>` and **1** `<StoreTemplate>`, no `<Pane>`/`<Template>` tag at all,
+  `content-length: 59229`, and the tool that prints the page prints the same document (`store-page.mjs` applies this switch and the
+  image salt, 59 229 = 59 229).
+- **The reading is the one already built** The eight background guids are still in every pane, so a client that now walks the block
+  must fetch them: eight image requests mean the spelling was the gate, zero means it is not and the frame is wrong in a third way.
+  Nobody has to watch the screen for that number.
+- **Suite** 168/168, exit 0, one check new: serving the other spelling renames the pane and the template and nothing else - the
+  document renames back to the parser one exactly, which is the assertion that keeps this a one-variable change.
+- **Does not establish** Which spelling the *handset's* build walks: the type table is the retail FFU's (`3058.50000.1445.1005`), the
+  handset runs `8.10.14219.0`, and F-041 says every offset in that entry is the image's. Nor that a pane would draw if it were read -
+  art would be fetched, which is all this measures.
+- **Undo** `pageElements: "parser"` + `POST /__lab/reload`: the page returns to `<Pane>` and the 59 139-byte delivery.
+
+## F-049 Neither spelling is read, so the next question is whether the pane block is parsed at all - and a control that answers it
+
+- **Date** 2026-10-20 14:39 local (12:39:01Z) · **Area** the page's frame · **Method** one device run with `pageElements:
+  "typetable"` (eight `<StorePane>`, one `<StoreTemplate>`, eight background guids), the capture read exchange by exchange.
+- **Measured: one request, nothing else** `captures/session-2026-10-20_12-37-34/index.jsonl` holds **one** device exchange - the page
+  at `12:39:01Z`, `200` - and **zero** image requests. So the other spelling is not the gate either: `<StorePane>` is as unread as
+  `<Pane>`. Two spellings, two negatives, and the eight background guids fetched by neither.
+- **What is now excluded, and how much of the register it covers** Every field inside a pane (`/Type`, `/SubType`, `/CollectionId`,
+  `/MaxItems`, `/MinItems`, `/DataSource`, `/BackgroundImage`, items inline against a reference) and both element spellings. If the
+  reader never enters `/Panes`, none of those can be the answer, and the negatives recorded in F-032, F-036, F-037, F-043 and F-048
+  are all negatives *about a subtree that may never be parsed* - which is a weaker statement than each of them claimed.
+- **The control, built because the two outcomes look identical from outside** `serve: "control-pane"`: the page the client accepts,
+  cut off **four characters into the first pane's first child** - deliberately unparseable, with a correct `content-length`, served
+  as `application/atom+xml`. E-008's control (F-027) cut the document at an arbitrary point and drew `0xc00cee23` on the handset,
+  which proves the client reaches *a parser*; this one cuts at a known depth, so the answer separates a reader that never walks into
+  `/Panes` from one that walks in and discards what it finds. A code on screen means it got there; the usual silence means it did not.
+- **Verified from this PC** `200`, `content-length: 210`, `x-lab-control: pane-truncated`, body ending `<Panes><StorePane><Id>` and
+  unparseable (`unclosed <Id>`); the handler refuses with `502 control_unavailable` if a page ever carries no pane, so the control
+  cannot silently degrade into an ordinary delivery. Suite **169/169**, exit 0, one check new: the control is a page, is unparseable
+  inside the first pane, and its declared length is the length it serves.
+- **Does not establish** Anything yet: it is an armed question, not a reading. And it says nothing about *why* the client stops before
+  the panes if it does - that would be the next frame experiment, with the 2013 feed as the only real document in hand and its
+  `88675309` as the one refusal on record.
+- **Undo** `serve: "generated"` + `POST /__lab/reload`.
+## F-050 `c00cee01` is the control's own answer: the client *does* walk into `/Panes`, and three config cuts made while the control was armed read nothing
+
+- **Date** 2026-10-20 15:0x local · **Area** the lab's armed state and the page's frame · **Method** four device opens, then the
+  capture read exchange by exchange.
+- **Measured: the handset was never shown a page.** `serve: "control-pane"` (F-049) was still armed, so every open delivered the
+  210-byte truncated control - `x-lab-control: pane-truncated`, `content-length: 210`, body ending `<Panes><StorePane><Id>` - and
+  the three config changes written and reloaded during those opens (`pageElements` back to `parser`, `pageFormat` back to
+  `storePage`, `paneBackgroundImage` back to `false`) could not be read, because the control path never builds a page. Three
+  negatives that carry no information, and the reload's `200` said only that the file had been re-read.
+- **The answer, and why it is the answer** The handset drew `c00cee01` four times (four retries of the same open). That is the
+  control's code: it differs from the arbitrary cut's `0xc00cee23` (F-027) because the cut point differs, and it agrees with it on
+  the only thing both were built to ask. This document is cut **four characters into the first pane's first child**, so a code and
+  not silence means the client reached a parser *and* walked into `/Panes`.
+- **What this corrects** F-049 rested its reading on the possibility that the pane block is never parsed, which made the negatives in
+  F-032, F-036, F-037, F-043 and F-048 negatives about a subtree nobody reads. That doubt is now settled the other way: the block is
+  read, so a field inside a pane that was ignored was ignored *by a parser that was looking*. The frame, not the pane, is where the
+  next experiment belongs.
+- **Verified from this PC** after `serve: "generated"` + `POST /__lab/reload`: `200`, **33 086 bytes**, no `x-lab-control` header,
+  `x-lab-page-format: storePage`, `x-lab-pane-type: col`, `x-lab-pane-background: none`, body ending `</a:feed></StorePage>`.
+  Suite **169/169**, exit 0.
+- **Does not establish** That the built page renders, or that any of the three reverted values is wrong: they were never delivered.
+  The next open is the first one in this session that shows the handset a page this lab built.
+- **Undo of the three cuts** Each is one value and none was read: `pageElements: "typetable"`, `pageFormat: "panes"`,
+  `paneBackgroundImage: true`. `serve` stays `"generated"`: the control is not a thing to leave armed.
+## F-051 The handset accepts the built page, then a lab-injected 502 on `ssl-api.bing.com` is the only failure left in its sequence
+
+- **Date** 2026-10-20 15:2x local (12:50:03Z) · **Area** the client's start-up path · **Method** one device open with the page
+  served (`serve: "generated"`), the capture and the DNS log read together, then the hosts measured from this PC against a public
+  resolver.
+- **Measured: the code is gone, the page is taken** `captures/session-2026-10-20_12-40-22/index.jsonl`, last exchange: the page at
+  `12:50:03Z`, `200`, **33 166 bytes**, no error on screen. Four opens before it had drawn `c00cee01` because they were served the
+  control (F-050); this is the first delivery in this session that was a built page, and it is the first that drew no code. What
+  the screen showed instead is the client's own "not connected to the Store" dialog after a few seconds, then a spinner that never
+  ends.
+- **Measured: nothing follows the page** Zero exchanges after it - no `DataSource` fetch for any of the eight panes, no image
+  request, no second page. A document the client had refused would have answered with a code; a document it wants more of would
+  have produced a request. It produced neither, which is F-019's sign of a parsed page that yields no model.
+- **The one failure in the sequence, and it is this lab's** In the same 90 seconds the handset queried `www.msftncsi.com`,
+  `discoveryservice.windowsphone.com`, `ssl-api.bing.com`, `sup.live.net.co` and the page host. Of those, `ssl-api.bing.com` was
+  hijacked and intercepted, and the lab answered `502` (451-byte error body) at `12:50:01Z`, two seconds before the page. E-003
+  had kept the name because it "answers nothing on the real network either". **That is false**: from a public resolver the name
+  resolves (`150.171.73.13`, `150.171.74.13`) and the path the phone asks for
+  (`/winphone/clientconfig/rwsettingbluegdr1qfex.xml`) answers **302**. The lab was inventing a failure where the real service
+  redirects - the same defect F-031 found on the image CDN, on a host that sits on the client's start-up path.
+- **Armed: the name is out of both lists** Removed from `dns.hijack.names` and `proxy.mitm.hosts` together, because a name in one
+  and not the other is a tunnel. Verified on the running lab after `POST /__lab/reload`: `200`, and `/__lab/status` reports no
+  `bing` entry in either list. Suite **169/169**, exit 0.
+- **Does not establish** That the dialog was caused by this 502: it is the only injected failure in the window and it sits on the
+  path the client walks before it draws, but the reading is the next open. Nor that `discoveryservice.windowsphone.com` is innocent:
+  it resolves to a real Akamai edge whose TLS handshake now fails from this PC (`000`, exit 35), so it is dead but *not* touched by
+  this lab, and if the dialog survives this change it becomes the next candidate - which would need a capture first, and that needs
+  the name intercepted.
+- **Undo** Put `"ssl-api.bing.com"` back at the end of both lists + `POST /__lab/reload`.
+## F-052 With the 502 gone the dialog goes too, and the client never asks `discoveryservice` at all - so the spinner is the page's own emptiness
+
+- **Date** 2026-10-20 15:3x local (12:54:29Z) · **Area** the client's start-up path · **Method** one device open with
+  `discoveryservice.windowsphone.com` added to both `dns.hijack.names` and `proxy.mitm.hosts`, the capture and the DNS log read after it.
+- **Measured: the dialog is gone with the 502** The open before this one drew "not connected to the Store" with `ssl-api.bing.com`
+  answered `502` (F-051); after the name left both lists the dialog did not appear. The 502 was the dialog's cause.
+- **Measured: the arm found nothing, because the client does not ask** In the 12:54:29Z open the handset made exactly **one** DNS
+  query - the page host (`hijack`) - and **one** exchange, the page, `200`, **33 166 bytes**. It did **not** query or contact
+  `discoveryservice.windowsphone.com`, although the name was hijacked and intercepted at that moment and it had resolved it nine
+  minutes earlier. So the name is not on the path this open walks, and the next-candidate role F-051 gave it is withdrawn.
+- **What the silence now means** Page delivered, validator satisfied (no code), no follow-up of any kind - no `DataSource` fetch, no
+  image, no second page - and the screen spinning. Nine documents have now produced this same second group (F-027, F-032, F-049), and
+  today's two repairs removed the two *errors* that were hiding it rather than changing it. The remaining defect is that the client
+  builds no page model from a document whose every parser path it carries.
+- **Does not establish** Why. Nothing in this entry distinguishes an empty model from a model whose drawing throws, and no served body
+  will: the surface that would say which is the device's own state, which has never been read after a failed open
+  (`Data\SharedData\Comms\Unistore\data`, `AggregateCache.uca`, `EdmCache`).
+- **Undo** Remove the name from both lists + `POST /__lab/reload`; it is still armed as the instrument for the other reading.
+## F-053 The phone's own state after a failed open: the page is cached, nothing else is written, and its DLL has no `StorePane`
+
+- **Date** 2026-10-20 15:0x local · **Area** the device's state, read for the first time after a failed open · **Method** mass
+  storage mode (`H:`), `tools/phone-readout.ps1` run elevated (`-OutDir .phone-read2`), then direct reads of the mounted volume.
+- **Measured: the page is taken and kept** `Data\SharedData\EdmCache\Short\9\7f3c9a52…$48b1e555$2B74.zmz`, `33166` bytes, written
+  `14:54:27` local - the delivery the capture shows at `12:54:29Z`. The five opens before it cached `210`, `210`, `205`, `205`, `205`
+  bytes: the control (F-050). So the client stores the built page exactly as it stores the control, and the cache is not the place
+  where the two differ.
+- **Measured: nothing follows, in the device's own record** The report's "modified after the threshold" list ends at that entry.
+  After `14:54:27` the phone wrote **no** Store-related file at all: no second response, no `AggregateCache.uca` update (last write
+  `14:13:32`, i.e. before the open), no `*.error.txt`, no crash drop. The `Data\Users\Public\Documents\Debug` directory still holds
+  only the 2026-10-19 entry. This is the device-side confirmation of F-052's one request and nothing else.
+- **Measured: the handset's binary does not know the spelling F-048 tried** `H:\Windows\System32\ZMarketplace.dll`, 565 248 bytes:
+  `StorePane`, `StoreTemplate` and `StorePaneListResult` occur **zero** times, in ASCII and in UTF-16. The only `Panes` is inside
+  the log line `Found %d Store Panes` (@28800). The three-level shape `Panes > StorePaneListResult > StorePane` (F-041's retail
+  type table) is therefore not this build's grammar, and F-048's `typetable` arm was reading a different generation's naming.
+- **Measured: the path strings are UTF-16, and the citations are right** `50 00 61 00 6e 00 65 00 73 00` at `@28776` is
+  `/Panes/Pane` and `@28824` is `/Templates/Template`. An ASCII-only scan of the same bytes finds neither - which is how this entry
+  found them missing on the first pass and then proved itself wrong. The whole path vocabulary is 15 UTF-16 strings that begin with
+  `/`; every one the page parser walks is among them, and none of them is deeper than two segments.
+- **Measured: no parse configuration ships on the device** The binary logs `LoadEntryPropertiesFromParseConfig`,
+  `GetConfigAndElementPath`, `Prop: %d, %s, path {%S}, value {%S}`, `found`, `missing` - a per-property trace of what the parse read.
+  A name search over `H:\Windows`, `H:\Data` and `H:\Programs` for `*parse*`, `*tuner*`, `*storepage*`, `*marketplace*` finds no such
+  file (481 hits, all Bing configuration, audio tuners, DSM policy and the EdmCache entries). A search of every file under
+  `Data\SystemData`, `Windows\Logs` and `Data\Users\Public` modified in the six hours before the read (16 files) finds **no** line
+  carrying `Store Panes`, `Store Templates`, `Prop: ` or `StoreObjects`: the trace exists as code and is not being written to a file
+  this device keeps.
+- **What the hub's own UI asks for** `ZuneAssets480x800.dll`, the hub's style names, 47 of them: the item kinds are
+  `Store_HubCollectionUI_*` and `Store_HubFeaturedItemUI_*` (with `Store_ChartCollectionUI_*` / `Store_ChartFeaturedItemUI_*` for a
+  chart), and the layouts are `TemplateType003` (list), `004`, `015`, `017`. A hub is drawn from a **collection** item kind and a
+  **featured** item kind - and the page this lab serves carries eight panes of one kind, `col`, all under `TemplateType003`.
+- **Does not establish** That a featured pane would be drawn, or that the missing piece is the pane kind at all: the client caches
+  the page and stops, which is consistent with an empty model for any reason. It also does not tell whether `AggregateCache.uca` is
+  written on exit or on a built model - the one write in the window (`14:13:32`) precedes the open that followed it, so this entry
+  does not claim it as a signal.
+## F-054 The hub's own UI names two item kinds, and the page now carries both
+
+- **Date** 2026-10-20 15:2x local · **Area** the page document · **Method** the UI asset names read on the mounted phone
+  (`H:\Windows\System32\ZuneAssets480x800.dll`), then one value in the builder and a check in the suite.
+- **Measured: the hub has two kinds of item, not one** 47 `Store_*` names in that DLL. The item kinds are
+  `Store_HubCollectionUI_ArtSize/ArtMargin/TitleMargin` and `Store_HubFeaturedItemUI_Margin`, with the chart page's pair beside
+  them; the layouts are `TemplateType003` (list), `004`, `015` and `017`. Every page this lab has ever served carried **one** kind
+  for all eight panes (`col`, `Collection`, `inv`, one at a time) and one layout, `003` - a shape this vocabulary never describes.
+  A hub is a featured item plus collections.
+- **The change, and it is the first pane and nothing else** `livestore.protocol.paneTypeFeatured`: when set, the **first** pane
+  carries that kind and the rest carry `paneType`. Nothing else moves - same sections, same order, same `Id`/`Title`/`CollectionId`,
+  same `DataSource`, same `MaxItems`/`MinItems`, same template block, same entries. An empty value leaves every earlier document
+  byte for byte, and the suite asserts both arms.
+- **Verified from this PC** after a **restart** (a reload re-reads `config.json` only, not the modules - the served page kept the old
+  kind until `node src/main.mjs` was started again): `200`, `content-length: 33144`, `x-lab-pane-type: FeaturedItem+Collection`,
+  `<Type>FeaturedItem</Type>` exactly once (the `social` pane, index 1) and `<Type>Collection</Type>` seven times, the last pane
+  `books + reference` still a collection. `paneType` is `Collection` again rather than `col`, because `Collection` is the word the
+  UI itself uses and `col` was the object-code guess (F-043, negative).
+- **Suite** **170/170**, exit 0, one check new (the featured pane is the first one and only the first) and one changed rather than
+  weakened: the existing check that the served page and the header agree now reads both kinds off both surfaces, so a builder that
+  wrote a kind the header did not report still fails.
+- **Does not establish** That the client draws either kind. The hypothesis is that a hub with only collection panes builds no
+  model, and the reading is the next open: an image request, a `DataSource` fetch, or an `AggregateCache.uca` write would each say
+  the panes were used; the same silence would say the kind is not the gate.
+- **Undo** Empty `paneTypeFeatured` and put `paneType` back to `col`, then restart the lab.
+## F-055 The featured pane is read and changes nothing either, so the kind is not the gate
+
+- **Date** 2026-10-20 15:1x local (13:11:09Z) · **Area** the page document · **Method** one open with `paneTypeFeatured:
+  "FeaturedItem"` armed (F-054), the capture and the DNS log read after it.
+- **Measured** One exchange: the page, `200`, **33 224 bytes** (the same document the PC verifies, 80 bytes longer because the
+  handset's own query string travels back in the self link), and **nothing after it** - no `DataSource` fetch for any pane, no image,
+  no second page. One DNS query, the page host. Byte for byte the shape of F-052's silence.
+- **What that excludes** The pane's `/Type` as the thing that decides whether a pane becomes a list, on its fourth value and the first
+  one taken from the handset's UI vocabulary rather than from the parser's: `inv` (F-043), `Collection`, `col` (F-043) and now
+  `FeaturedItem` beside it. Four tokens, four silences. Whatever the pane parser wants, it is not being told by `/Type`.
+- **Also checked, because it was the one pane field never compared against a real document** The pane's `<link><type>`. The lab
+  writes `ApplicationCollection` on the pane's own link and on the entry's, `Application` on each of the 17 applications - and the
+  archived 2013 response uses exactly those two, `ApplicationCollection` once and `Application` fourteen times. So the link type is
+  not a mismatch this lab introduced.
+- **Does not establish** That the panes are used at all. Four kinds rejected silently is also what a client that never looks at
+  `/Panes` after parsing it would do - F-050 proved the parser *enters* the block (the control's code), not that the model builder
+  consumes it.
+- **Undo** Empty `paneTypeFeatured`, `paneType` back to `col`, and the lab restarted: the page then returns to the 33 086-byte
+  delivery of the morning.
+## F-056 The layout is not the gate either, and the client re-asks for the same page while it spins
+
+- **Date** 2026-10-20 15:1x local (13:13:16Z) · **Area** the page document · **Method** one open with `templateType: "017"` armed
+  (paired to F-054's featured first pane), the capture read with the response headers the lab itself recorded.
+- **Measured** Three deliveries of the same page in two minutes - `13:11:09` (`003`), `13:12:33` (`003`), `13:13:16` (**`017`**),
+  every one `200`, `33 224` bytes, `x-lab-pane-type: FeaturedItem+Collection` - and after each of them **nothing**: no `DataSource`
+  fetch, no image, no second endpoint. The header proves the last delivery really carried the new layout, so the silence is not an
+  un-armed arm read as a negative.
+- **What that excludes** The template layout as the thing that turns a parsed page into a model: `003` (plain list, every earlier
+  delivery) and `017` (rich list item, the layout the hub's UI assets pair with `RightPanel`/`Price`/`SuggestedReason`) both leave
+  the client spinning with no follow-up.
+- **Measured: the client keeps asking** Three requests for one URL with nothing in between is the client's retry, not a new intent -
+  the same shape F-051 saw four times. A page it had accepted and used would not be asked for again two minutes later.
+- **What is left, stated plainly** Seven structural and field-level variables have now been delivered and read with the page parser
+  confirmed (F-032, F-043, F-048, F-054, F-055, this entry, plus the two controls): element spelling, pane position, pane kind (four
+  values), background art, data source, source type, template layout, items inline against referenced. None moves the client past
+  the page. The surface that would say *why* - the client's own database under `Data\Users\DefApps` - has never been read, because a
+  normal and an elevated read are both denied (F-004).
+- **The way in that is not a write** Backup semantics (`SeBackupPrivilege`, i.e. `robocopy /B`) read a file regardless of its ACL
+  without changing an owner or a permission. That is the next read to try, and it is read-only: it needs the phone in mass storage
+  and nothing else.
+- **Undo** `templateType` back to `003` + `POST /__lab/reload`; the page returns to the 33 144-byte delivery of F-054.
+## F-057 Backup semantics open the folder the ACL refused - and it is the other client's state, not the Store's
+
+- **Date** 2026-10-20 15:3x local · **Area** the device's private state · **Method** phone in mass storage, `robocopy /B` (backup
+  semantics, `SeBackupPrivilege`) copying `H:\Data\Users\DefApps` out; no owner, ACL or permission touched.
+- **Measured: the read that F-004 said was impossible is possible without a write** `robocopy /B` copied **316 files** from
+  `Data\Users\DefApps` (305 under `APPDATA\Local\Packages`, 11 under `APPDATA\Local\Microsoft`). The earlier failures were an ACL
+  problem, not a privilege one: backup semantics read what ownership-taking would have been needed for, and they leave the device
+  exactly as they found it.
+- **Measured: that folder does not hold the Store's state** No copied file contains the string `storePages` or `ZMarketplace`. The
+  only package written after 14:30 on 2026-10-20 is `0d6b0d63-5770-4ee0-a79c-31767f7be5fc_h37gyvpph0nvj` - **One Live Network**, the
+  second client of F-029/F-030 (its `settings.dat` carries `OneLiveId`, `access_token`, `id_token`, `refresh_lease`,
+  `NotificationPoller`, `contacts.lastSyncUtc`). Nothing in this tree is the system Store's model, cache or log.
+- **What that closes** The plan that F-056 left open - read the client's own database to learn why the model is empty - does not apply
+  to this surface, because the system Store keeps no data here. The Store's only state on this device is the shared one already read
+  in F-053: `Data\SharedData\EdmCache` (the responses, page included) and `Data\SharedData\Comms\Unistore` (compressed, no readable
+  strings). Both were read; neither says why.
+- **Restored, because a read arm is not a thing to leave armed** `templateType` back to `003`, `paneTypeFeatured` empty, `paneType`
+  back to `col`, and `discoveryservice.windowsphone.com` out of both lists (F-052 measured that the handset never asks it). The lab
+  is back on the page every earlier delivery was compared against. Lab restarted (pid 14960) after an earlier instance died at
+  `13:13:16Z` and left one request falling through to the real CDN - the first delivery of that window that was not this lab's.
+- **Does not establish** Anything about the model. It only removes a surface from the list, and it corrects a standing claim: F-004's
+  "the client's own database stays out of reach" is about *owner and ACL*, not about reading - backup semantics reach it.
+## F-058 The page without panes - the archived shape - is a fourth silence, and the document is now excluded
+
+- **Date** 2026-10-20 15:2x local (13:24:39Z) · **Area** the page document · **Method** one open with `withoutPanes: true`
+  (F-057's builder change), the capture read with its own headers.
+- **Measured** One exchange: the page, `200`, **28 767 bytes**, `x-lab-pane-placement: none` - the document verified from this PC
+  as 0 `<Pane>`, 1 `<Templates>`, 8 `a:entry`, 17 applications - and **nothing after it**. Same silence as every delivery with panes.
+- **What this closes** The arrangement the register kept pointing at: the one real page response this project holds has no `<Panes>`,
+  its items hang off the root's entries, and three entries (F-014, F-027, F-049) reasoned about a document that differs from ours in
+  exactly this. Served, it changes nothing. Together with F-052 to F-056 the page document is now excluded as the cause of the empty
+  model: element spelling, pane position, pane kind (four values), background art, data source and its type, template layout, items
+  inline against referenced, panes present against absent.
+- **Also closed: the data-source type** The client has four feed parsers (`Applications`, `FeaturedApps`, `Collections`,
+  `Categories`, F-036) and only the first has a builder here - `/v8/catalog/appCategories/<id>` answers with an *application* list,
+  not a categories feed, so arming `Categories` would pair a type with a body that contradicts it. That arm is not available without
+  writing a categories feed, and it is not armed.
+- **A bug this arm found and fixed** The first implementation removed the template block together with the panes, because both sat in
+  one branch; the suite check written for the arm caught it (`3 entries, 0 panes, 0 templates`), the builder now takes the two
+  decisions separately, and the check asserts that the no-panes document equals the with-panes one minus the pane block. Suite
+  **171/171**, exit 0.
+- **Restored** `withoutPanes: false` + `POST /__lab/reload`: the lab serves the 33 086-byte page again, 8 panes.
+- **Does not establish** What the client is waiting for. Fourteen deliveries across seven sessions and nine structural variants, all
+  accepted, none producing a model. The next step is not another body: it is to see the client's own decisions, which means either
+  the trace (`Prop: %d, %s, path {%S}, value {%S}` - not written to any file this device keeps, F-053) or a genuine v9 page response
+  from the real service, neither of which this lab can manufacture.
+
+## F-059 The page cache holds five 205-byte pages, the E-008 control and three `{"probe":true}` bodies under the page's own key
+
+- **Date** 2026-10-20 16:36 local · **Area** the client's response cache · **Method** mass storage read with
+  `tools/phone-readout.ps1` (elevated, backup semantics), every `EdmCache` entry copied to
+  `captures/phone-2026-10-20-mass-storage` and decoded here.
+- **Why it was looked at** The home had stopped loading with **no request reaching the lab at all** between 16:03
+  and 16:36, while the same phone was resolving update hosts through this lab's DNS - so the client was not
+  failing at the network, it was not asking. A client that believes it already holds a page does exactly that.
+- **Measured** 78 cache entries. Under the page's key (`Short\9\7f3c9a52...$48b1e555`, the page-cookie name)
+  the client holds **eleven** documents: today's real 310 091-byte `<StorePage>`, one 55 373-byte page from
+  2026-10-15 21:46, **five 205-210 byte `<StorePage>` documents** written 14:42-14:47 today, the **872-byte
+  truncated control of E-008**, and - under `Short\0\og_storePages...`, the same request by URL - **three
+  14-byte bodies that decode to `{"probe":true}`**, a JSON probe this lab no longer produces. A 205-byte
+  StorePage and a 14-byte JSON body cannot draw a store, and nothing in this repository answers the page URL
+  with either today.
+- **What it changes** The register's page-side experiments all assumed the client was rendering the body it had
+  just fetched. It keeps several bodies per key and has kept failures; which one it picks is unknown, and one
+  of the candidates is a document this lab deliberately broke.
+- **Not established** That a cached body is what it renders. That is answered by removing the nine bodies that
+  cannot be a page and watching whether the client asks again - `tools/phone-clear-page-cache.ps1`, whose
+  selection was verified on a reconstructed tree (9 files chosen, the 310 091-byte page and the 55 373-byte one
+  kept). The run itself needs elevation; the first prompt was declined, so it is not done.
+
+## F-060 The cache was not the gate: with the bad bodies removed the client asked again, was served a fresh page, and drew nothing
+
+- **Date** 2026-10-20 16:44 local (14:44Z) · **Area** the client's response cache vs. the page delivery · **Method** F-059's
+  removal run actually executed on the handset (`tools/phone-clear-page-cache.ps1`, elevated, **9 files removed**, the
+  310 091-byte page and the 55 373-byte one kept), then the Store opened with `tools/watch.mjs` listening.
+- **Measured** The client asked for the page **again** at 14:44:53Z - the first page request since 14:03 - and the lab answered
+  `200`, **310 091 bytes**, `x-lab-protocol: storePages`, `x-lab-source: zinc:live store (203 apps)`. After it: **no image
+  request, no application list**, and instead two configuration exchanges 28 s later
+  (`/v8/Configuration/Stores/OEMStores/NOKIA` 14:45:21Z and `/v8/Configuration/Stores/MOStores/` 14:45:22Z, both `200`,
+  `x-lab-protocol: configuration`, `x-lab-invented: 1`), then silence from 192.168.0.136.
+- **Measured, second open - after the restart (14:47:17Z-14:47:33Z)** `tools/restart-lab.cmd` replaced the process at 14:46:25Z
+  (pid 7240, all four listeners, first run of the source fix), and the next open is **not** the same silence: page `200`
+  `310 091`, then four `/v8/catalog/queries?prefix=…` `502` in one second (the suggestion route with no handler, F-040), then the
+  application list `200` `10 909`, then **six image requests, all `200` with real bitmaps** (`3 333`, `5 178`, `34 486` jpeg,
+  `1 867`, `58 700`, `66 555` bytes), then the page **again** at 14:47:33Z. All six guids are `<editorialItem><image>` guids in the
+  body just served - Files, Freda, Fantasia Painter, Foreca Weather, Fhotoroom, Face Mask - so the client resolved the **first
+  pane's items** and fetched their art, which no delivery before this one produced. It then discarded the model and asked for the
+  page a second time: F-056's loop, now with art in it.
+- **What this closes** F-059's open question, and in the direction that removes a suspect: the client does not need to be
+  starved of a cached body to ask. Five 205-byte StorePages, the E-008 control and the three `{"probe":true}` bodies were gone,
+  the fresh request was answered with the document the lab believes in, and the outcome is the same silence as every delivery
+  from F-052 to F-058. So the empty model is not "it rendered an old failure"; the failure is produced from the body just served.
+- **What it opens** Two things sit in the window between the page and its re-request: the four `502`s on the suggestion route
+  (`/v8/catalog/queries`, F-040 - a route this lab has never answered, in the same second the model is built) and the two
+  configuration answers, which are the lab's **invention** (`x-lab-source: built: no capture of this endpoint exists`) and arrive
+  *after* the page rather than before it, the reverse of the order E-008 and E-009 assumed. Neither is proven to matter; both are
+  injected failures or inventions inside the loop.
+- **Does not establish** Which of the two orders the client requires, or that the configuration body is at fault. It establishes
+  only that the cache is excluded and that the configuration pair is what the client reaches for next.
+
+## F-061 A lab that is green in the source can still be serving old code, so every code change ends in a restart
+
+- **Date** 2026-10-20 16:46 local · **Area** how this project is operated, not the protocol · **Method** the search fix was green
+  in `npm run selftest` while the running lab (pid 11712, started 16:01) still answered `q=f` with 50 apps and no
+  `x-lab-query-match`.
+- **Why it matters** `POST /__lab/reload` re-reads `config.json` only. Every change under `src/` reaches the device **only**
+  after the process is started again, and a capture taken in between is attributed to code that is not in the repository.
+- **Fixed by** `tools/restart-lab.cmd` (wrapper, raises UAC) -> `tools/restart-lab.ps1`: stop by **port** (80/443/8899 tcp,
+  53 udp), never by command line - an elevated node shows an **empty** `CommandLine` to a non-elevated query, so a name-based
+  kill finds nothing and reports success - refuse to touch a non-node holder (Windows ICS parks a `svchost` on `0.0.0.0:53`
+  while the lab binds the LAN address, so port 53 has two owners and only one is the lab), wait for the ports to be free,
+  start detached with a fresh log under `logs/`, wait for `/__lab/status`, and write the outcome to `logs/lab-restart.txt`.
+- **Verified** The restart that produced pid 7240 reported `result OK` with all four listeners owned by it, and the same
+  process then answered `q=f` with **8** apps (`x-lab-query-match: title-prefix`), no query with 50, `q=zzzz` with 0 - the
+  first time the fix has been observed in the process that the phone talks to.
+
+## F-062 The client walks the first pane and nothing else, and the application list asks for no art in either session
+
+- **Date** 2026-10-20 16:47 local (14:47Z) · **Area** which part of the page the client resolves · **Method** the two sessions of the
+  evening read the same way: every image guid the device requested matched against the body of the page and the body of the
+  application list it had just been served.
+- **Measured** Session `14-01-32`: **16** image requests, **16 of 16** guids present in the page as `<editorialItem><image>`,
+  **0** present in the application list. Session `14-46-26`: **6** image requests, **6 of 6** editorial, **0** in the list. Every
+  request is `imagetype=icon_small`. The six of the second session are the first pane's items - Files, Freda, Fantasia Painter,
+  Foreca Weather, Fhotoroom, Face Mask - and the page is re-requested **10 s** after them (F-060).
+- **What it says** The client resolves the **featured pane first** and gets its art, then discards the model and asks for the page
+  again: the re-request sits between pane 1 and the rest, not at the end of the page. The application list's 17 rows never ask for
+  an icon in either session, which retires the reading F-035 was pointing at - that a field in the list entry (`<k>`,
+  `appListRank: 4`, or the missing bare `<title>`, `appListEntryTitle: false`) costs the list its art. The list asks for nothing
+  because the client has already restarted before it lays the list out; the entry shape is not reached.
+- **Does not establish** Why pane 1 ends the run. It is the first model the client builds and the first one it throws away, so the
+  next variable belongs inside that pane rather than in the page as a whole.
+
+## F-063 The one 5xx left in the page flow is a suggestion route nobody ever answered, and it is asked at open, not while typing
+
+- **Date** 2026-10-20 16:50 local (14:50Z) · **Area** `/v8/catalog/queries` in the sequence that builds the home · **Method** the
+  full tool battery run against the restarted lab (`selftest` 183/183, `rehearse` 44/44, `doctor`, `store:page`, `page:diff`,
+  `verify-rootreg`, `canary`, `dnsprobe`, `analyze`, `sequence`), then every image guid of the evening's two sessions matched
+  against the body that named it.
+- **Measured: the battery** every check green before the change and **185/185** with the two checks added below. `page:diff`'s
+  root-children difference against the archive is explained and not a defect: the archived root *is* the Atom feed, ours is a
+  `<StorePage>` wrapping one, and the feed inside carries `a:updated` exactly as the archive does. `dnsprobe` needs
+  `--server 192.168.0.220`: the lab binds the LAN address and never loopback, so `127.0.0.1:53` is silent by design.
+- **Measured: the device, alone in the room** after the cache clear the handset re-requests the page **every 2.5-3 minutes** with
+  nothing after it (`14:47:33Z`, `14:50:13Z`, `14:53:05Z`), so the loop is observable without an operator. On the one open
+  that had to refetch art (14:47:17Z) it asked `/v8/catalog/queries?…&prefix=f` **four times in one second**, in the same second
+  as the application list, *before* the page's art. **CORRECTION, 2026-10-20 18:0x:** the operator was typing in the search box at
+  that moment (`prefix=f`, and `prefix=w` at 15:52:40Z is the same gesture), so this is **not** evidence that the route is asked
+  without a human - it is exactly what F-040 said, asked *while typing*. The four-in-a-second is the retry of a failing request
+  while the keyboard is still open, not a prefetch.
+- **Measured: every link the page hands out resolves** each `editorialItem`'s `<link><target>` was requested from this PC: the five
+  that name apps the page carries (Files, Freda, Fantasia Painter, Fhotoroom, Face Mask) answer `200`, `x-lab-protocol: appDetail`.
+  (A `fetch` with a `Host` header is not a test here - Node drops it, the request lands on the loopback host and comes back `502`
+  from the relay's own loop guard. `curl -H "Host: …"` is what proves it.)
+- **Fixed** `/v[89]/catalog/queries` now has a route: an **empty** Atom feed with the catalog namespace, the feed's own
+  `rel="self"`, `a:updated`, `a:title`, `a:id` and no entries, carrying `x-lab-protocol: suggestions`, `x-lab-prefix`,
+  `x-lab-suggestions: 0`, `x-lab-source: built: no capture of this endpoint exists` and `x-lab-invented: 1`. Nothing is
+  reconstructed - no reply to this endpoint exists anywhere - and "no suggestions" is the true answer to a prefix with nothing
+  behind it. The reasoning is F-051's: an injected failure inside the window that builds the model is removed before anything
+  else in that window is read.
+- **Does not establish** That the four `502`s were what kept the page from drawing: they are asked **while the operator types in
+  the search box**, never on the page retries. Fixing the route still matters - a search that answers `502` while the user types
+  is a failure this lab injected on a path a human is using - but it is a defect of the **search** surface, not evidence about
+  the home page. What the change establishes is narrower: the flow no longer contains a 5xx this lab injected.
+- **Suite** two new checks: the suggestion route answers `200` with a feed and no `<a:entry>` and names its prefix; a request
+  without a prefix is answered and says `x-lab-prefix: none`. **185/185**, exit 0.
+
+## F-064 The search surface renders and the home does not, on the same client, in the same minute
+
+- **Date** 2026-10-20 17:52 local (15:52Z) · **Area** what the client does with the page when the last 5xx is gone · **Method** the
+  phone rebooted, the Store opened while the lab (pid 23312) answered `/v8/catalog/queries` with the empty feed of F-063; the
+  session read with `sequence`-style extraction per client address.
+- **Measured** 48 exchanges from `192.168.0.136`, and a shape no earlier session has: page `200` (310 076) -> **suggestions `200`**
+  (705, `prefix=w`) -> application list `200` (17 299, with `q=`) -> **11 images** -> `appDetail /v9/catalog/apps/626c5f06…`
+  **eight times** `200` -> `appCategories/windowsphone.Social` `200` (32 562) -> application list `200` (64 625, the 25 apps of that
+  category) -> **11 more images** -> `appDetail /v9/catalog/apps/fab00e25…` four times `200`. Details and category paths had
+  **never** been requested in any session before this one.
+- **Who caused it - correction, and it is the point** the operator was **typing in the search box and tapping results** the whole
+  time (`prefix=w`, `q=`, then a category chip, then details). So this is not the client wandering: the client **drew a search
+  surface the operator could read, type into and tap**, and every one of those taps produced a request that the lab answered. On
+  the same client, in the same minute, the **home page** is the surface that paints nothing. The register's earlier exclusions
+  (F-052 to F-058) were read as "no follow-up request = no model"; a surface that draws does not have to ask for anything, so
+  that inference was weaker than it looked.
+- **Measured: the bitmaps are real** all **26** image responses read back - 19 from `bodies/`, 7 from `inlineBase64` - and checked by
+  magic bytes: **24 PNG, 2 JPEG**, none WebP/AVIF. `content-length` and the bytes actually stored agree exactly (**471 098** = the
+  sum of both sides), so nothing is truncated. The seven inline ones are the reason a first pass counted 19: reading only
+  `body.file` reports an empty buffer, which is a reader's bug and not a capture's. So the art the client fetched is decodable by an
+  8.1 device - the images are not the reason nothing is painted.
+- **Measured: the screen** the operator reports the **home** drawing nothing, and reports browsing through searches - which is
+  only possible on a rendered list. So the failure is specific to the hub page document this lab generates for
+  `typeId=DynamicHub.Main`, not to the client's rendering, not to the art, and not to the entry shape: the list and the detail
+  answer with the **same** `buildApplicationListFeed` builder whose entries draw there.
+- **Confound, stated plainly** two things changed together: the suggestion route stopped answering `502`, and the phone rebooted.
+  The clean comparison is the 16:47 open (cache cleared, no reboot, `queries` `502`, F-060): there the run stopped after six images
+  and asked for the page again; here it goes on to details and a category. That is consistent with the `502` having been the gate,
+  and it does not prove it.
+- **What this moves** The question is no longer "does this client draw anything this lab serves" - it does - but "what does the
+  hub page carry that a list and a detail do not, and that stops it being drawn". The difference is exactly the `<Panes>` block and
+  the `<StorePage>` root: everything else in the page - entries, editorial items, applications, offers, images - is the same
+  builder that renders on the search surface. The repeated `appDetail` (8x, then 4x) is the operator tapping, not a retry.
+- **Does not establish** Why painting fails. That needs the client's own view state, which this device does not write anywhere
+  readable (F-053), or a page response from the real service to diff against.
+
+## F-065 The page root was the gate: rooted at `<a:feed>` the home draws, rooted at `<StorePage>` it never did
+
+- **Date** 2026-10-20 17:58 local (15:58Z) · **Area** the home page document, and everything the register concluded about it ·
+  **Method** one config value (`livestore.protocol.pageFormat`: `storePage` -> `atom`), applied with `POST /__lab/reload`, no
+  restart, no code change, nothing else touched; then the Store was brought back to the home. The oracle was built an hour
+  earlier by F-064: on this client the search list, the app detail and a category **draw**, and all three are flat `<a:feed>`
+  documents from this same builder, so "the client cannot render what the lab serves" was already false.
+- **Measured** With the same 15 panes, 15 entries, 203 applications and 309 745 bytes, only the document element changed - from
+  `<StorePage>` to `<a:feed>` - and the handset **accepted the page and drew its title** where it had drawn nothing.
+  **Correction, same evening:** the operator reports that what is visible is the Dynamic Hub **title only** - the panes and their
+  items still render nothing. So this entry measures the **page envelope**, not the sections: the root was one gate, and the
+  content is another. The word "drew the home" would have been an overclaim. The header said `x-lab-page-format: atom`,
+  `x-lab-pane-placement: none`, so no capture can be read as the wrong arm. After it drew, the phone stopped re-requesting the
+  page: **one** exchange after the change (the page itself at 15:58:41Z, 309 914 bytes) and silence where five evenings of
+  deliveries had produced a page request every 2.5-3 minutes.
+- **Why the register missed it for five evenings** Every page-side experiment from F-014 to F-058 was run on documents rooted at
+  `<StorePage>`, so each one varied the *contents* of a document the client was already rejecting at its root: element spelling,
+  pane position, pane kind, background art, data source, template layout, items inline against referenced, panes present against
+  absent. Each was a real variable and each produced the same silence, which was read as "the contents do not matter". The one
+  constant in all fourteen deliveries was the root. F-058 got closest - it served the archived *arrangement* (no panes, items at
+  the root) - but kept the `<StorePage>` root, so it differed from the archive in the one place the archive could not be compared.
+- **Why the parser's path table said otherwise, and what it is actually evidence of** The parser names `/Panes/Pane` and
+  `/Templates/Template` as absolute paths, and `/StorePage` is in its store-page grammar, which is why the builder was rooted
+  there and why `page:diff` reported the panes as carried. That table describes what the parser *can read out of a document it has
+  accepted*; it never said which root the hub renderer accepts. The archived real page - an `<a:feed>` root - was the only witness
+  about the root, and the register treated it as evidence about the *contents* instead.
+- **The evidence this overrides** Nothing measured on the device is contradicted: every prior arm's "no follow-up request" was
+  true, and the inference drawn from it ("the contents were rejected") is what this entry retires. The archived page is now read
+  the way it was always written: root `<a:feed>`, `a:updated`, `a:title`, `a:id`, `impressionId`, then the entries.
+- **Made the default** `pageFormat` now defaults to `atom` in `protocolSettings`, and `normalizePageFormat` falls back to `atom`
+  for a value it does not recognise - a typo must land on the document the device draws, not on the one that was blank for five
+  evenings. `storePage` and `panes` remain reachable by name: they are the arms the register measured, not the default.
+- **The checks this moved, and why none were weakened** Four vocabulary checks failed the moment the default moved, and the cause
+  was that they had been reading the *default* instead of naming the document they are about. They now build with
+  `pageFormat: 'storePage'` explicitly and still assert every path of the parser's grammar, the `<StorePage>` root, the namespace
+  declarations and the pane placement. A fifth check was added for the question the old four were silently asking: a builder call
+  that names no format must produce the `<a:feed>` root the device drew. `tools/rehearse.mjs` asserted `root === 'StorePage'` as
+  "rooted where the parser looks" - it now asserts `root === 'a:feed'`, with the comment recording that the old assertion was the
+  opposite of what the handset wants. Suite **186/186**, exit 0; `rehearse` **44/44**.
+- **Does not establish** That the panes render - they do not: the title is what appears. It also does not establish that the root
+  was the *only* thing wrong, only that it was a gate, and that the fourteen arms before it were read through a closed door. The
+  next single variable is the one the archive spells: `<a:feed>` **without** `<Panes>`, the section's `<a:entry>` at the root
+  carrying its own `<editorialItems>` and `<applications>`, which is what the 2013 response actually is.
+
+## F-066 Error 88675309 says what this endpoint is not: `/v9/catalog/storePages` requires the panes the archive does not have
+
+- **Date** 2026-10-20 18:2x local · **Area** the home endpoint's own shape, now that the envelope is accepted (F-065) · **Method** the
+  archive's arrangement served to the *same* endpoint: `pageFormat: atom` + `withoutPanes: true` (with the F-063-era builder fixed so
+  the flag reaches the feed header), applied by a restart - pid 8596 - which served root `<a:feed>`, **0 `<Pane>`**, 1 `<Templates>`,
+  15 `a:entry` at the root, 301 515 bytes.
+- **Measured** The handset answered with **error 88675309** on screen. Reverted to `withoutPanes: false` the same minute (`POST
+  /__lab/reload`, 309 745 bytes, 15 panes) and the accepted state came back: title drawn, no error.
+- **What it establishes** The archived 2013 document is a response of `/v8/catalog/hubs?…&hub=games` - a **different endpoint**, from
+  a different generation - and its arrangement (no panes, items hanging off root entries) is not what `/v9/catalog/storePages`
+  accepts. This is the error F-058 reasoned about and the distinction F-058 missed: it served the archive's *arrangement* to an
+  endpoint that never emitted that arrangement, kept the `<StorePage>` root, and read the silence as "the arrangement does not
+  matter". The truth is narrower: for this endpoint the panes are **required**, and 88675309 is what it says when they are missing.
+- **A useful side effect** An error code is a better instrument than silence. From here the client distinguishes three outcomes for
+  a page: **error** (rejected at the envelope - the no-panes document), **title only** (accepted, sections refused - the panes
+  present with an invented `<Type>col</Type>`), and **drawn**. The middle one is where the work is, and it is a state the register
+  did not have before tonight.
+- **Also fixed, and it mattered for the reading** `withoutPanes` was silently ignored whenever the document was an `<a:feed>`: the
+  first attempt changed the flag and produced byte-identical output (309 745 both times), which would have been read as "the arm did
+  nothing". The builder now drops the feed's pane block when the flag is set, and the suite asserts it (`panes=0, templates=1,
+  entries present`). Suite **187/187**, exit 0.
+- **Does not establish** Anything about the pane's own fields. That is the next variable and it is armed: `paneType: ""` - the
+  `<Type>col</Type>` the panes carried is a value no capture supports, and with it removed the document is 309 505 bytes with
+  `x-lab-pane-type: none`.
+- **Result of that arm, same evening** The operator reopened the home and reports **the same title, nothing below it**: removing
+  `/Type` from every pane changes nothing visible. So `/Type` is not what the hub renderer needs to place a pane - the field is
+  read by the parser, but its presence or absence does not move the screen. The arm is still the served state (`x-lab-pane-type:
+  none`), because reverting a variable that changed nothing would hide which document the last capture belongs to.
+- **What is left of the pane, measured** Of the **12** paths `PANE_FIELDS` lists, the served pane carries **8**: `/Id`, `/Title`,
+  `/DataSource/Type`, `/DataSource/Url`, `/CollectionId`, `/MaxItems`, `/MinItems` and (as an element) no more `/Type`. Absent:
+  **`/SubType`** (@14004), `/BackgroundImage/id` (@14024), `/LiveTileUpdateInterval` (@14064), `/StoreObjectsForLiveTile`
+  (@14248). `vocabulary.mjs` says plainly that the *paths* are evidenced and the **values** of `Type`/`SubType` are not, so the next
+  probe is a value (`Collection`, the one with a delivery history, or a `SubType`), not another structural guess.
+
+## F-067 The header is the feed's own `<a:title>`, so the client is reading and painting our document
+
+- **Date** 2026-10-20 18:3x local · **Area** what the handset does with the accepted page · **Method** a spike with one value moved:
+  `hubTemplate` `DynamicHub` -> `DynamicChart` (`whyNotATemplate` admits both), hot reload, device refetched at `16:31:36Z` and the
+  capture confirms it received `<templateName>DynamicChart</templateName>`.
+- **Measured** The header on the handset reads **`dynamichub.main-IT-WindowsPhone81`** - the feed's `<a:title>`, verbatim, down to
+  the lower-case `d` and the mixed case of the locale. It did **not** follow the template name.
+- **What it establishes** The client parses the document, reaches the feed header and **paints it**, and the string it paints is
+  ours. That is stronger than "the page is accepted": a document this lab built is on screen, with a value this lab chose. The
+  template name is not what labels the page, so `hubTemplate` is a rendering hint and not a title source.
+- **A consequence to fix, not a finding** The label is the `typeId`-derived string, which is why it looks like a machine name. A
+  nicer title is a one-line change in the page builder, and now we know it lands on the screen.
+- **Does not establish** Anything about the panes, which remain the open question: the header paints and the pane area is empty.
+  The next variable is the pane's own vocabulary - `/SubType` and the `Type` *values*, neither of which any capture evidences -
+  or the template block's numbers, which are evidenced.

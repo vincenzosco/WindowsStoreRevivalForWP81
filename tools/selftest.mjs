@@ -415,6 +415,27 @@ async function main() {
     JSON.stringify(config.proxy.mitm.hosts));
   check('config: advertiseIp override respected', config.__hijackIp === FAKE_LAN_IP, config.__hijackIp);
 
+  // The Live Store key has three homes and one order, and the order is not
+  // cosmetic: config.json is tracked by git, so a key left there is a key in the
+  // repository's history. These two checks hold the rule the README states, on a
+  // scratch directory, so a later refactor of loadConfig cannot quietly start
+  // reading the tracked file again.
+  const keyDir = path.join(WORK, 'keycheck');
+  await fsp.mkdir(keyDir, { recursive: true });
+  const keyPath = path.join(keyDir, 'config.json');
+  await fsp.writeFile(keyPath, '{}');
+  await fsp.writeFile(path.join(keyDir, '.zinc-key'), 'key-from-the-file\n');
+  const fromFile = loadConfig(keyPath);
+  check('config: the Live Store key is read from .zinc-key beside config.json',
+    fromFile.livestore.apiKey === 'key-from-the-file',
+    `read ${fromFile.livestore.apiKey.length} character(s)`);
+  process.env.ZINC_API_KEY = 'key-from-the-environment';
+  const fromEnv = loadConfig(keyPath);
+  delete process.env.ZINC_API_KEY;
+  check('config: an exported ZINC_API_KEY wins over the file',
+    fromEnv.livestore.apiKey === 'key-from-the-environment',
+    'the elevated restart starts with no environment, so the file is what reaches it');
+
   // --- the capture census, before any device --------------------------------
   // These are the readings that decide *whose* traffic a later finding is about,
   // and getting them wrong is not an obvious failure: an aggregate that hands
@@ -1061,6 +1082,27 @@ async function main() {
     id: 0, host: '127.0.0.1', port: 443, scheme: 'https', method: 'GET',
     path: '/v9/catalog/storePages?typeId=DynamicHub.Main', headers: {}, body: null, mitm: true, client: {},
   };
+  // The header of the page is the feed's `<a:title>` on screen (F-067), so the string
+  // there is read by a person. Checked through the router, because a value that
+  // reaches the builder and not the wire is exactly the failure this file has caught
+  // before. The archived machine form stays reachable as the fallback.
+  const pageTitle = config.livestore.protocol.pageTitle;
+  config.livestore.protocol.pageTitle = 'Windows Store';
+  const titled = await probeRouter.handle(
+    { ...probeCtx, path: '/v9/catalog/storePages?typeId=DynamicHub.Main&cc=IT' },
+    { config, logger, zinc: null },
+  );
+  const titledTitle = (titled?.body?.toString('utf8')?.match(/<a:title[^>]*>([^<]*)</) || [])[1];
+  config.livestore.protocol.pageTitle = '';
+  const rawTitled = await probeRouter.handle(
+    { ...probeCtx, path: '/v9/catalog/storePages?typeId=DynamicHub.Main&cc=IT' },
+    { config, logger, zinc: null },
+  );
+  const rawTitle = (rawTitled?.body?.toString('utf8')?.match(/<a:title[^>]*>([^<]*)</) || [])[1];
+  config.livestore.protocol.pageTitle = pageTitle;
+  check('store protocol: the page header is a title a person can read, and the raw one is still reachable',
+    titledTitle === 'Windows Store' && rawTitle === 'DynamicHub.Main-IT-WindowsPhone81',
+    `set=${titledTitle || '(none)'} raw=${rawTitle || '(none)'}`);
   const answeredWhenOn = await probeRouter.handle(probeCtx, { config, logger, zinc: null });
   config.livestore.protocol.enabled = false;
   const answeredWhenOff = await probeRouter.handle(probeCtx, { config, logger, zinc: null });

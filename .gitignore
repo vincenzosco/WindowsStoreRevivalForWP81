@@ -21,3 +21,12 @@ desktop.ini
 # committed by accident.
 IsolatedStore/
 Users*/
+.phone-read/
+.phone-read2/
+.lab.log
+.lab-run.ps1
+.phone-read3/
+.lab-restart.ps1
+.zinc-key
+zinc.key
+.env.zinc

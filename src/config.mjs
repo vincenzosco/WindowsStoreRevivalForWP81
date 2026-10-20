@@ -239,6 +239,24 @@ export function loadConfig(configPath = 'config.json') {
   // client, the status endpoint and the protocol handler all see the key that is
   // actually in force - a key that worked for one and not the other would read as
   // the service refusing a key it had already accepted.
+  //
+  // The file is the second source, and the reason it exists is the restart: the lab
+  // is relaunched elevated by `tools\restart-lab.cmd`, from a window that has none
+  // of the shell's environment, so a key exported in the operator's terminal does
+  // not survive into the process the phone actually talks to. A gitignored file
+  // next to config.json does, whichever launcher starts the lab.
+  const keyFile = ['.zinc-key', 'zinc.key', '.env.zinc']
+    .map((name) => path.join(path.dirname(absolute), name))
+    .find((candidate) => fs.existsSync(candidate));
+  if (!process.env.ZINC_API_KEY && keyFile) {
+    try {
+      const fromFile = fs.readFileSync(keyFile, 'utf8').split(/\r?\n/)[0].trim();
+      if (fromFile) config.livestore.apiKey = fromFile;
+    } catch {
+      // An unreadable key file is not a configuration error worth refusing to
+      // start over: without a key the lab serves the catalog file and says so.
+    }
+  }
   if (process.env.ZINC_API_KEY) config.livestore.apiKey = process.env.ZINC_API_KEY;
 
   const lanIp = detectLanIp();

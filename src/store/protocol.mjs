@@ -168,6 +168,7 @@ function protocolSettings(config) {
     // documents from this same builder - so the root, and nothing else, was the gate.
     // `storePage` and `panes` stay as values because they are the arms the register
     // measured; they are experiments now, not the default.
+    pageTitle: 'Windows Store',
     pageFormat: 'atom',
     // Where the panes sit inside a page document: `false` under the page root
     // (`<StorePage><Panes>`), `true` inside the feed (`<StorePage><a:feed><Panes>`).
@@ -856,10 +857,14 @@ export function createStoreProtocol(config) {
         const xml = buildStorePageFeed({
           sections,
           selfHref: requestPath,
-          // Same construction the archived page feeds use, for both their title
-          // (`games-PK-WindowsPhone80`) and their id
-          // (`games-PK-WindowsPhone80-ALL-ALL`).
-          title: `${typeId}-${cc}-WindowsPhone81`,
+          // The id keeps the archived construction (`games-PK-WindowsPhone80-ALL-ALL`),
+          // because nothing reads it and matching the archive costs nothing. The
+          // *title* does not: the handset paints `<a:title>` as the header of the
+          // page - measured, F-067, down to the lower-case `d` - so writing
+          // `DynamicHub.Main-IT-WindowsPhone81` there put a machine name on the user's
+          // screen. `pageTitle` is the value a person should read; the archived form
+          // stays as the fallback for anyone who wants the raw one back.
+          title: String(settings.pageTitle || '').trim() || `${typeId}-${cc}-WindowsPhone81`,
           id: `${typeId}-${cc}-WindowsPhone81-ALL-ALL`,
           templateName: settings.hubTemplate,
           templateType: settings.templateType,
