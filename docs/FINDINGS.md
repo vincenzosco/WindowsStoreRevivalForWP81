@@ -32,7 +32,7 @@ same event appears as `17:56:07` local and `15:56:07Z`.
 | The served response that file matches | `bodies/0117-res.bin`, 55234 bytes, SHA-256 `38E904A1F685AE9F9E1B71DF3B809A951D798BD5461E604FDCBBBD1355ED4FBE` — the delivery at `2026-10-15T18:47:27.289Z` | `captures/session-2026-10-15_15-36-48/index.jsonl` + `bodies/`, `sha256sum` |
 | What the device wrote about the Store in the whole session | **one** file — the cached page above. 84 files under `Data` since 17:00, 18 past the hive/telemetry/ETW filter, 1 of them Store-related | elevated readout, 2026-10-15 21:05 |
 | Page built today from the fixture | 29893 bytes, identical except `<a:updated>` | `npm run store:page`, `.selftest/cmp.fresh.txt` |
-| Checks in the suite | 155, all passing | `npm run selftest`, 2026-10-20 |
+| Checks in the suite | 160, all passing | `npm run selftest`, 2026-10-20 (155 before F-037, F-038 and F-039 added five) |
 | Exchanges in `captures/` | 487 480 over 28 sessions, of which **109 are a device's** - 99.98 % of the index is this PC | `npm run analyze -- --all-sessions`, 2026-10-16 |
 | DNS records in the same capture | 19 615 from 21 addresses, and only **8 639** are this PC's - a `.151` that asks for `a.root-servers.net` 6 437 times, not the phone | same command |
 | Devices the requests identify in that capture | **two** handsets: `x-wp-device-id 40752FED…5A1872` (the one above) and `3499541B…EEA32B`, `os=8.10.14226.0`, `dm=RM-941_eu_hungary_356`; the two overlap for 2 h 38 m on 2026-10-15 | same command |
@@ -1957,3 +1957,182 @@ Each one changes **a single variable**, and each names the value it replaced so 
   frame is still an inference - so an outcome of "config asked, page still empty" would leave it unclear which of the two is at fault.
   Nothing here identifies `88675309` either: it is not in the `0xC00C...` family of the control's code and this entry does not claim a
   meaning for it beyond "the archived document's verdict".
+
+## F-036 No pane source has ever been requested, and the field that decides it is the pane's type
+
+- **Date** 2026-10-20 05:30-05:48 local (03:30-03:48Z) · **Area** the page document, and the one sentence of F-032 this entry takes
+  back · **Method** a provenance pass over **every** session index in `captures/` for the two markers of a pane source
+  (`chunkSize=25`, `category=`), then a re-read of the parser's own literal pool.
+- **Measured: the handset has never asked for a pane's data source** Across every captured session - 41 directories today, 28 when
+  the pass was first made - there are **23** exchanges whose path carries either marker, and they belong to **two** clients, both on
+  this PC: 19 from `127.0.0.1` and 4 from `192.168.0.220`, the lab's own rehearsal. Not one carries `x-wp-device-id`, and the
+  handset accounts for **zero** of them. A page has named eight pane sources since 2026-10-16 and the client has asked for none.
+- **The sentence this takes back** F-032 read `14:50:54` on 2026-10-17 - `GET /v9/catalog/apps` `200`, one second after the pane
+  document - as the data source being followed. It is not: that exchange is the **search** feed, preceded by four
+  `/v8/catalog/queries?prefix=f` suggestions in the same second, which is the operator typing in the Store's search box. The
+  ordering that made it look causal is what a human does after changing a config value, and the device id on that request says
+  whose it was.
+- **Why that mattered, and what it re-opens** A pane source that is written and never fetched is not a content problem: the client
+  rejects the pane before it builds a download. The parser's own paths say what it needs to build one (`/Panes/Pane`,
+  `/Templates/Template`), so a pane becomes a list through a **feed type and a URL pair**, and the lab had been sending
+  `<Type>Collection</Type>` - a **page-family** token from a different pool (@29064, beside `sDynamicHub` @29010 and the page types)
+  - into a field that names a feed.
+- **The four tokens, and the one the lab was sending** The same module of literals holds exactly four feed types, each immediately
+  beside its own parser: `Applications` (@139376) with `Marketplace_ParseAppsFeedIntoStoreObjects` (@139480), `FeaturedApps`
+  (@139404) with `…ParseFeedIntoStoreObjects` (@139336), `Collections` (@139432) with `…ParseCollectionsFeedIntoStoreObjects`
+  (@139524), `Categories` (@139456) with `…ParseCategoriesFeedIntoStoreObjects` (@139576). `Collection` is in none of them.
+- **The single variable, armed and verified from the PC** `livestore.protocol.paneType` was **`Applications`** in `config.json`
+  (`Collection` before it), the page was verified from this PC as `200` with `x-lab-pane-type: Applications`, and the reading was to
+  be the next Store open: one value, one document, nothing else changed.
+- **What the next open decides, and it is a binary** Either the client now asks for `chunkSize=25&category=…` - the pane built, the
+  chain through - or it does not, and the field is not read at all. Both outcomes are worth more than another page body, because the
+  first one turns "the page parses" into "the page is used", which no document experiment has managed.
+- **Does not establish** Which of the two `<Type>` fields the client feeds into `Create StoreObjects`, or that it uses either: this
+  entry reads the pools and the counts, not the call. It also does not prove the absolute path in the parser is where a *served*
+  path resolves - `/Panes/Pane` is a path from the document root, and only the device says which root.
+- **Undo** `paneType` back to `Collection` and `POST /__lab/reload` - the delivered page then returns to the shape of `05:29:53Z`.
+  (Done the same morning; see F-037 for why the arm was withdrawn before the handset ever saw it.)
+
+## F-037 The pane's property map separates its kind from its feed, and the panes have only ever been served under one of the two roots
+
+- **Date** 2026-10-20 07:40-08:20 local · **Area** the page document, read from the client's own data instead of a served body ·
+  **Method** the property maps in the carved `ZMarketplace.dll`, read as structures rather than as strings.
+- **Measured: two pane maps, and the feed lives in the second one** The triples at `0x10004ca4`-`0x10004cd8` are one object's own
+  fields, and the map that follows carries `/Type` as a field of the pane itself (@319-324 in the map at
+  `0x10004ca4`-`0x10004d58), beside `/CollectionId`, `/MaxItems`, `/MinItems` (1, 323-330). The **feed type and URL are
+  `/DataSource/Type`** (prop 326) **and `/DataSource/Url`** (prop 327) - a different pair, one level down. So the feed is named
+  inside `/DataSource`, and the pane's `/Type` is its own kind.
+- **What that takes back, one hour after writing it** F-036's arm moved `paneType` to `Applications` on the reading that the feed
+  type belonged there. The map says otherwise: the two fields are different properties of different nodes, and `Create StoreObjects
+  with FeedType = %S Url = %S` takes its arguments from `/DataSource`. The arm was withdrawn before the handset saw a delivery - the
+  value is `Collection` again, the value every page since 2026-10-16 carried - and the comment in `config.json` now records the
+  reading instead of the guess.
+- **Measured: what a hub is drawn from, in the UI's own vocabulary** The same FFU region that carries the page's style names also
+  carries the pane kinds the UI knows (`Store_HubCollectionUI_*`, `Store_HubFeaturedItemUI_*`) and the empty state
+  `ForYouEmptyListUI_NoResults_Test`. So a hub draws a **background pane** with a picture, then one layout per pane; an empty hub is
+  a picture with nothing under it - which is exactly what the handset shows, and it is a rendering of "no items", not of "no page".
+- **Measured: the endpoint table names the page id and the art types** The same block, as text: the store page endpoint takes the id
+  the client asks with (`typeId`) and answers a **layout**; the image endpoints are keyed by guid and `imagetype`, and they are what
+  the background pane would draw from.
+- **The single variable now armed, and it is a position** `/Panes/Pane` is an absolute path and the page document has two roots it
+  could be read from: the page's own (`<StorePage>`, every delivery so far) and the feed nested inside it, which carries the
+  entries (`/feed/entry`) and has never carried a pane. `livestore.protocol.panesInFeed` was **`true`**, with the response header
+  `x-lab-pane-placement` saying `feed` or `page` so no capture can be read as the wrong arm. Suite **156/156**, exit 0, with a new
+  check asserting the move: same panes, same count, other parent.
+- **Why this is the next reading and not another guess** Three arrangements of content have been served and all three drew an
+  empty hub: panes with a reference and no items, panes with inline items and no data source, panes with inline items and a data
+  source. What has never moved is where the panes sit, and the only path that names them is absolute - so the document under test
+  and the document the parser describes differ by exactly one parent element. If the blue background stayed after this, the
+  placement would not be the gate either, and the remaining candidate would be the page root's own identity.
+- **Read the same morning, and the arm answers itself: no** `npm run page:diff` on the fed-placed page reports `/Panes/Pane` and
+  `/Templates/Template` **missing**, and the tool is right to: both paths are absolute from the document element, so a pane
+  inside the feed is at `/StorePage/feed/Panes/Pane` and matches neither. The app list is the independent argument that settles
+  which namespace an unprefixed path resolves against - its `<applications>` elements are in the catalog namespace and its items
+  render, so the pane's own elements, which live in the same namespace, are the right spelling too. `panesInFeed` is therefore
+  **`false`** again, kept in the code and asserted by the suite as the tool for the other reading, and the delivery is back to the
+  `05:29:53Z` shape (`22 required path(s): 10 exactly, 12 prefix-only, 0 missing`). The arm cost one hour and no device run,
+  which is the cheapest possible way for a wrong hypothesis to die.
+- **What this leaves, with the map in hand** A pane's fields are fully carried (8/8 of the second map) and every absolute path
+  the parser names is present, so the model's absence is not a missing element and not a wrong parent. The two readings that
+  survive are about **values the client cross-references**: the page root's own identity (our `<a:id>`/`<a:title>` are invented
+  strings, and the feed's header is the only part of the document with no observed counterpart on a StorePage), and the pane's
+  `/Type`/`/SubType` values, which no source read so far constrains. Both are one-field experiments on an otherwise complete
+  document, and both need the handset.
+- **Does not establish** Which root the parser reads `/Panes/Pane` from - this is a one-bit experiment, not a proof. Nor that the
+  carved image is the phone's own: it is **not**. The FFU's copy is 573 440 bytes and carries no `X-WP-StorePage-Cookie` string at
+  all, where the phone's own file is 565 248 bytes and its string table has it at `@46984` (F-024, `src/store/vocabulary.mjs`) -
+  so every offset in this entry is this image's and cannot be mapped onto the handset's build. The phone's copy is only readable
+  from the handset itself.
+- **Undo** `panesInFeed` back to `false`, restart the lab (a code path, not a config read): the page returns to the delivery at
+  `05:29:53Z`, `x-lab-pane-placement: page`.
+- **Rebuilt, and why it says so** The prose of F-036 and of this entry was rewritten on 2026-10-20 after an editor overwrote this
+  file instead of appending to it. Every number quoted was then re-read from the artefact it names - the 23 pane-source exchanges
+  and their two client addresses from `captures/*/index.jsonl`, the suite count from `npm run selftest`, the path verdict from
+  `npm run page:diff` - and both entries reach the same conclusions they reached before the accident. The original wording is gone;
+  the measurements are not, which is the only part of an entry this register promises.
+
+## F-038 The silent fallback: a misspelt `dataSourceType` served a page that said nothing was wrong
+
+- **Date** 2026-10-20 · **Area** `src/store/protocol.mjs`, and the rule this project spends its register on · **Method** the module
+  read line by line against its own comments, then the resolver called directly instead of the server.
+- **What the code said and did** `dataSourceType(value)` carried a comment promising that an unknown name "reads as the type that is
+  served *and is logged where it happens*". It returned the fallback string, and the promise was never implemented: there is no
+  logger in the function and no caller logged the substitution, so `dataSourceType: "Applicatons"` in `config.json` produced an
+  ordinary page with `<Type>Applications</Type>` in every pane and **nothing anywhere** recording that the value armed was not the
+  value served. A capture of that run reads exactly like a capture of the armed value.
+- **Why this is a defect and not a nit** Every experiment here is one variable, and the reading is the capture. A config value that
+  is silently replaced turns one variable into two and leaves no trace of which one ran - the same failure F-027 answered with a
+  control and F-037 answers with a response header saying where the panes went.
+- **The change, three parts** `dataSourceType()` is now `resolveDataSourceType()` and returns `{ type, requested, substituted }`
+  instead of a bare string, so the substitution is a value a caller cannot drop by accident. The page delivery names it, only when
+  it happens, in `x-lab-data-source-substituted: <requested>` - so the **absence** of that header is the statement "the armed value
+  is the value served". The same substitution writes one `logger.warn` line naming the three types the client has parsers for.
+- **Verified** `npm run selftest` **159/159**, exit 0, with three checks new: a known name is served as written and reports no
+  substitution; an unknown one falls back to `Applications` *and* reports `substituted: true` beside the string it was given; and
+  the armed delivery the suite is made against carries no substitution header at all (`header=(absent)`). The first of the three is
+  the one that matters after a refactor: a resolver that answered `substituted: true` for everything would pass the second alone.
+- **Does not establish** That any past run was affected: no capture in `captures/` was taken with an unknown `dataSourceType` (the
+  value has been `Applications` since the field was introduced), so this is a defect that was reachable and never reached. It also
+  does not turn the fallback into a refusal - a typo still serves a page, because a client in the middle of a one-variable
+  experiment should not be handed a `502` for a config mistake the operator can read in a header.
+- **Undo** Nothing to undo in `config.json`: no value changed. The code change is one function and two lines at the delivery, and
+  the three checks are what would notice a partial revert.
+
+## F-039 The configuration document derived its schemes from the listener, so an https fetch served a plaintext "Secure" base
+
+- **Date** 2026-10-20 · **Area** `buildStoreConfiguration` (`src/store/catalog-feed.mjs`) · **Method** the same two requests the
+  handset makes, sent from this PC to both listeners, then the settings compared line by line.
+- **Measured, and it is a one-line reproduction** `curl` of `
+  /v8/Configuration/Stores/OEMStores/NOKIA` over `http://` answers `WPAppsMarketplaceShop` on `http` and
+  `WPAppsMarketplaceShopSecure` on `https` - correct. The same request over `https://` answers **`ShopSecure` on `http://`** and
+  `ShopCdn` on `https://`, i.e. the document inverts both, because the function computed one scheme from the arrival and then gave
+  the other to the setting whose *name* is what the client trusts.
+- **Why it survived** The suite's configuration probes all set `scheme: 'http'`, so the only branch ever exercised was the one that
+  happens to be right. That is the whole failure: a value derived from a request property that no check varied.
+- **The change** Each base carries the scheme its own name has in the client's shipped file - `Shop` on `http`, `ShopSecure`,
+  `Buy`, `Accounts`, `Review` and `Telemetry` on `https`, both CDNs on `http` - and only the **host** follows the request. The
+  `scheme` parameter is gone from the builder and from its caller rather than left unused, because a parameter that decides nothing
+  is the next reader's wrong assumption.
+- **Verified** both listeners from this PC: `ShopSecure` `https://marketplaceedgeservice.windowsphone.com/`, `Shop`
+  `http://…`, `ShopCdn` `http://cdn.…` on `:80` and on `:443`. Suite **160/160**, exit 0, with a check that fetches the document
+  with `scheme: 'https'`, asserts the three bases by name **and** requires the body to be byte-identical to the plaintext one -
+  the second half is what makes it a check about independence rather than about one string.
+- **Does not establish** That the client prefers one listener over the other, or that either document is accepted: it asked for
+  these endpoints eight times on 2026-10-16 and has not asked since a reboot (E-010), so nothing here has been read on the screen.
+  Nor that the shipped file's schemes are the ones a *revived* service should answer with - they are the schemes the client was
+  built against, which is the only claim made.
+- **Undo** `git revert` of the one commit: nothing in `config.json` changed, and both listeners have to be re-read to see it.
+
+## F-040 The suggestion download is its own feed type, and its URL is not spelled in `ZMarketplace.dll`
+
+- **Date** 2026-10-20 · **Area** the endpoint this lab still answers `502` - `/v8/catalog/queries` - and the strings behind it ·
+  **Method** the captured request read back field by field, then `ZMarketplace.strings.txt` searched for the classes and element
+  names that would parse a reply (306 636 bytes, ASCII and UTF-16LE at every offset).
+- **Measured: the request, whole** `GET http://cdn.marketplaceedgeservice.windowsphone.com/v8/catalog/queries?os=8.10.14219.0
+  &zLocale=it-IT&cc=IT&lang=it-IT&prefix=f&chunksize=4&includeApplications=true&includeAlbums=false&includeArtists=false
+  &includeTracks=false&includePodcasts=false&cf=` from `192.168.0.137`, `user-agent: ZDM/4.0; Windows Mobile 8.1` - the same
+  transport the store page uses - and **without** the `x-wp-device-id` and `muid` headers the page carries, so the download is
+  identified by its path and not by the device. Every one of these was answered `502` by this lab, which is a route with no handler.
+- **Measured: the client has a downloader and a feed type for it** The same string table holds
+  `PendingSuggestListDownload::{GetSendStream,GenerateBody,Begin,OnComplete}`, `GetApplicationSuggestionsRequest`, and
+  `PendingPrefixSearchListDownload::PostParseFixup` - a parse fixup, i.e. a reply document this class reads. Beside
+  `CMarketplaceObjectList_StoreObjects::CreateDownloader` and its log line `FeedType %S m_SourceUrl %S` sit the two names
+  **`ApplicationSuggestions`** (@6228) and **`Suggestions`** (@6276), which is where the feed-type family lives - so a suggestion
+  list is a feed with its own type, parsed by its own class, and not a variant of the application list.
+- **Measured: the advice this endpoint does not need** The same region carries `AppendBingHeader`, `FormatDateTimeForBing`,
+  `SearchTime`, `Cookie`, `X-Search-FBIDExpired` and `Content-Type: application/xml; charset=UTF-8`: the suggestion path is wired
+  to a Bing-backed search identity, which is why its query names `includeAlbums`, `includeArtists`, `includeTracks` and
+  `includePodcasts` next to `includeApplications` - the families a Zune-generation search answered, not the Store's app catalogue.
+- **The trap worth writing down** `/Phone/Prefix` (@12160) sits in the *payment address* table, between `/Address/Country` and
+  `/Phone/Extension`. A reader looking for the search's `prefix` finds it there and builds a `<Phone><Prefix>` request body for a
+  GET that carries its prefix in the query string. It is a billing phone-number prefix and has nothing to do with search.
+- **The negative that bounds it** The word `queries` **does not appear anywhere** in `ZMarketplace.strings.txt` - zero hits - so
+  the URL this request uses is not spelled in this module: it is either assembled from parts or held by a component this readout
+  never captured. Nothing here says which feed type name maps to which endpoint either; `ApplicationSuggestions` and `Suggestions`
+  are two names beside a downloader factory, not a mapping.
+- **What it changes in this lab, and what it does not** The `502` on that path stays. Answering it would mean inventing a document
+  whose element names nobody has read, on an endpoint the phone has asked for **only** while a human typed in the search box -
+  which is the correction to the sentence that called these "the search box's suggestions" in the plural and read them as store
+  traffic. It is the Zune search transport asking, with the Store open, and a revival that answers the page does not need it.
+- **Does not establish** That the client renders anything from a suggestion reply, or that the four retries in a row mean it
+  wanted one: a `502` is retried the same way a page is (E-010), and no capture has ever contained a `200` for this path.
