@@ -1685,6 +1685,49 @@ Each one changes **a single variable**, and each names the value it replaced so 
   on now. The host is out of both lists - arming it again is three edits, on purpose, so no single value can turn a diagnostic on.
 
 
+## F-035 The marked placeholder is drawn, and the list stopped asking for art
+
+- **Date** 2026-10-20 04:50-04:56 local (02:50-02:56Z) · **Area** the image CDN, and the application list · **Method** one Store
+  open from the handset with the images handler armed, read three ways: the capture index of `session-2026-10-20_04-50-23`, the
+  DNS log for the same day (`captures/dns-queries-2026-10-20.jsonl`, which records every query, hijacked or not), and the
+  operator's reading of the screen. Then a byte comparison of the list body this open was served against the list body served on
+  2026-10-17 (`captures/session-2026-10-17_14-17-31/bodies/0016-res.bin`), entry by entry.
+- **Measured, and it answers F-031's open question** The app detail asked `cdn.marketplaceimages.../v8/images/ec1e8563-…?imagetype=icon_large`
+  and got `200` - the first `200` an image host has ever received from this lab - and the operator saw **the light frame and the
+  diagonal cross** inside the app's information page. A flat field cannot paint a mark, so this is not "the slot changed colour":
+  the client **decoded our PNG and drew it**. F-031 wrote that a flat square could not distinguish "the client drew our bytes"
+  from "the client drew its own empty-image background"; the marked placeholder was made to settle exactly that, and it has.
+- **Measured, and it is the new problem** The same open rendered the **application list** (17 entries, each carrying
+  `<image><id>urn:uuid:…</id></image>`) and asked for **no image at all**: zero image exchanges in the session, and exactly **one**
+  DNS query for the image host in the whole day - `04:50:51.491Z`, the detail's. The tile slot in the list is the client's own empty
+  background, because nothing was ever requested. This is not the capture missing traffic: a request that never happened leaves no
+  exchange, but it would leave a DNS query, and there is none.
+- **The comparison that makes it an anomaly rather than a quirk** On 2026-10-17 the **same list URL** (`/v9/catalog/apps?chunkSize=50&q=f`)
+  was followed within one second by **240 icon requests** for `icon_small`, covering **all 17 guids** that today's list carries - the
+  same 17 apps, the same guids (`56dff8d0-…` first in both). So the client does fetch list art from this feed, and today it did not.
+- **What changed between the two bodies, read instead of guessed** First entry, byte for byte: identical except `<a:updated>`, the
+  `impressionId` value, and **`<mediaInstanceId>urn:uuid:…</mediaInstanceId>` inside `<offers><offer>`** - the field armed on 10-17
+  evening for the install hypothesis (F-033), which is the only structural difference between the list that produced 240 icon
+  requests and the list that produced none. Its *spelling* is not the difference: both archives (the 2013 page and the v8 list) write
+  exactly `urn:uuid:<uuid>`, and so do we.
+- **Inferred, and it stays an inference** The extra element inside the offer is the prime suspect: a plausible mechanism is that the
+  client builds the entry, keeps the fields it already read (the app is listed, with its name and publisher), and stops before the
+  tile's art is bound. Nothing here observes that parse, so the mechanism is unproven. The one confound is named: the images handler
+  went from `502` on 10-17 to `200` today, and a `502` cannot *suppress* a request - it caused 240 of them - so it cannot be the
+  reason there were none. Two data points, one variable, one confound that points the other way.
+- **The single variable now armed** `livestore.protocol.offerMediaInstance` is `false` again (`config.json`, the command in the
+  comment, and this entry's Undo). The reading is one Store open and the same search: if the list asks for `icon_small` again, the
+  field was the regression and F-033's hypothesis is dead with a cost named; if it does not, the field is not the cause and the next
+  candidate is the list's own art path, which has never been given a `200` to draw.
+- **Does not establish** That the client would *draw* our bitmap in a list at all: `icon_small` has been requested 800 times across
+  every session and answered `502` every time before today, so a list tile drawing this lab's picture is something no run has shown.
+  Nor that `mediaInstanceId` is the cause - that is what the armed arm is for. And nothing here touches the home page: `storePages`
+  answered `200` again at `04:56:18` and still produced no model, which is the same silence F-027 left off at, on a different endpoint
+  from the one this entry is about.
+- **Undo** `offerMediaInstance` back to `false` and `POST /__lab/reload` - measured, not asserted: the flag is read per request, so a
+  reload is enough and the earlier note that said "restart" was wrong. The comment in `config.json` carries the old value.
+
+
 ## Open experiments, continued
 
 ### E-008 The page never made unparseable: the control every page experiment was missing
