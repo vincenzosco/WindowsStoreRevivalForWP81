@@ -32,7 +32,7 @@ same event appears as `17:56:07` local and `15:56:07Z`.
 | The served response that file matches | `bodies/0117-res.bin`, 55234 bytes, SHA-256 `38E904A1F685AE9F9E1B71DF3B809A951D798BD5461E604FDCBBBD1355ED4FBE` — the delivery at `2026-10-15T18:47:27.289Z` | `captures/session-2026-10-15_15-36-48/index.jsonl` + `bodies/`, `sha256sum` |
 | What the device wrote about the Store in the whole session | **one** file — the cached page above. 84 files under `Data` since 17:00, 18 past the hive/telemetry/ETW filter, 1 of them Store-related | elevated readout, 2026-10-15 21:05 |
 | Page built today from the fixture | 29893 bytes, identical except `<a:updated>` | `npm run store:page`, `.selftest/cmp.fresh.txt` |
-| Checks in the suite | 160, all passing | `npm run selftest`, 2026-10-20 (155 before F-037, F-038 and F-039 added five) |
+| Checks in the suite | 161, all passing | `npm run selftest`, 2026-10-20 (155 before F-037 to F-041 added six) |
 | Exchanges in `captures/` | 487 480 over 28 sessions, of which **109 are a device's** - 99.98 % of the index is this PC | `npm run analyze -- --all-sessions`, 2026-10-16 |
 | DNS records in the same capture | 19 615 from 21 addresses, and only **8 639** are this PC's - a `.151` that asks for `a.root-servers.net` 6 437 times, not the phone | same command |
 | Devices the requests identify in that capture | **two** handsets: `x-wp-device-id 40752FED…5A1872` (the one above) and `3499541B…EEA32B`, `os=8.10.14226.0`, `dm=RM-941_eu_hungary_356`; the two overlap for 2 h 38 m on 2026-10-15 | same command |
@@ -2136,3 +2136,42 @@ Each one changes **a single variable**, and each names the value it replaced so 
   traffic. It is the Zune search transport asking, with the Store open, and a revival that answers the page does not need it.
 - **Does not establish** That the client renders anything from a suggestion reply, or that the four retries in a row mean it
   wanted one: a `502` is retried the same way a page is (E-010), and no capture has ever contained a `200` for this path.
+
+## F-041 The endpoint table settles the suggestion base, and says what `chunkSize` actually is
+
+- **Date** 2026-10-20 · **Area** the client's endpoint table and its configuration settings, both in the signed retail FFU ·
+  **Method** `npm run image:find -- --file <ffu> --pattern 'id="PrefixSearch"' --context 900`, plus the same tool run against
+  `id="WPAppsMarketplaceShopCdn"` for the settings block. Both encodings, every hit with its offset.
+- **Measured: four endpoints, whole, at @1177094311** The table spells the Store's calls as templates, and the four that matter
+  here are:
+  - `<ep id="Application" url="{WPAppsMarketplaceShop}v9/catalog/apps/{objectid}?os=…&oemId={DeviceRawOEMID}&moId={MOUniqueID}&cf={ContentFilter}{urltail}">`
+    and `ApplicationSecure` with the `ShopSecure` base - the **detail** page is `v9/catalog/apps` by object id;
+  - `<ep id="ApplicationSearch" url="{WPAppsMarketplaceShop}v9/catalog/apps?…&chunkSize={appsearchchunksize}&q={query}&cf={ContentFilter}">`
+    - the **same path** is the search, and its `chunkSize` is a **search** parameter, not a list size;
+  - `<ep id="PrefixSearch" url="{WPAppsMarketplaceAutoSuggest}v8/catalog/queries?…&prefix={query}&chunksize=4&includeApplications={includeapplications}&includeAlbums={includealbums}&includeArtists={includeartists}&includeTracks={includetracks}&includePodcasts={includepodcasts}&cf={ContentFilter}">`
+    - F-040's request, its base, and the four music families all named by the build.
+- **What that closes about F-036** The lab has spent a day asking why a pane source is never fetched, and why the device never
+  sends `chunkSize=25`. The table answers the second: `chunkSize` is `{appsearchchunksize}`, filled in by the **search** UI, and a
+  pane's source URL is this lab's own construction - `chunkSize` came from `pageSize`, a field of the lab, not of the client. So
+  the absence of a `chunkSize` request is not a client refusal to send one; it is evidence the pane was never fetched at all.
+- **Measured: the settings, whole, at @1177028332** The shipped `PROD` domain carries `WPAppsMarketplaceAccounts`, `AutoSuggest`
+  (`http://cdn.marketplaceedgeservice.windowsphone.com/`), `Buy`, `EdgeHttpIn`, `EdgeHttpsIn`, `ImageService`, `MoServices`,
+  `Review`, `Shop`, `ShopCdn`, `ShopSecure`, `Telemetry`, `TunerService`, `WindowsPhoneCom`, `WindowsPhoneComAppShareP` - each
+  with a `nexus=` attribute and each on the scheme its name implies. The `DF` domain (@1177033512) is the same list under
+  `dogfood.` hosts, which is what makes the five `<Domain>` ids real rather than decorative.
+- **The gap this lab had, and the one-line change** `buildStoreConfiguration` wrote every base except `AutoSuggest` - so the
+  document handed to the client named the page, the lists, the images and the update check, and left the suggestion endpoint's
+  placeholder without a setting of its own. It is written now, named rather than derived (the CDN host on plain http, as the file
+  has it), and a check asserts that exact line. Suite **161/161**, exit 0.
+- **Measured, for free: the type table spells the page grammar** The same image carries a name table at @414020144 and @423843176
+  that reads `… AppCollectionListResult StorePage Panes StorePaneListResult StorePane Templates StoreTemplate GetObjects
+  StoreObjectListResult StoreObject …` - `StorePage`, `Panes`, `StorePane`, `Templates`, `StoreTemplate` as the client's own
+  element names, in the same list as its object types. That is independent support for the spelling the served page uses, from a
+  source that is neither the parser's path table nor an archived response.
+- **Does not establish** The reply grammar of `/v8/catalog/queries`: the classes that would parse one are in the DLL
+  (`PendingSuggestListDownload`, `PendingPrefixSearchListDownload::PostParseFixup`, `GetApplicationSuggestionsRequest`), no element
+  name of the reply has been read, and answering it today would be inventing a document - which is why the route stays a `502`.
+  Nor that the client reads the *served* configuration for this base: E-010 measured one configuration fetch per boot and none
+  after a reboot, so the setting is a correction to a document nobody has been seen to adopt.
+- **Limit** Every offset in this entry is the image's, build `3058.50000.1445.1005`; the handset runs `8.10.14219.0`. The table is
+  data in a build, not a reading of this device's own copy.

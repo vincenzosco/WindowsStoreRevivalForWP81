@@ -1425,6 +1425,13 @@ async function main() {
       && /<setting id="WPAppsMarketplaceImageService"[^>]*>http:\/\/cdn\.marketplaceimages\.windowsphone\.com\//.test(oemText)
       && !/cdn\.127\.0\.0\.1/.test(oemText),
     oemText.split('<setting').find((line) => line.startsWith(' id="WPAppsMarketplaceShopSecure"')) || 'missing');
+  // The suggestion base is the one the `PrefixSearch` endpoint substitutes, and it
+  // is the CDN host on plain http in the client's own file (F-041). Without it the
+  // document names every base the client needs except the one behind `/v8/catalog/queries`.
+  check('store protocol: the configuration answer names the suggestion base the PrefixSearch endpoint substitutes',
+    /<setting id="WPAppsMarketplaceAutoSuggest" nexus="WPAppsMarketplaceAutoSuggest">http:\/\/cdn\.marketplaceedgeservice\.windowsphone\.com\/<\/setting>/.test(oemText),
+    oemText.split('<setting').find((line) => line.startsWith(' id="WPAppsMarketplaceAutoSuggest"')) || 'missing');
+
   // The schemes belong to the setting, not to the listener the request arrived on.
   // This is the same document fetched over TLS, and before F-039 it answered
   // `WPAppsMarketplaceShopSecure` with `http://` - a plaintext base under the name

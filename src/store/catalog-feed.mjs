@@ -891,6 +891,13 @@ export function buildStoreConfiguration({
   // ones the shipped file itself supplies for this family.
   base('WPAppsMarketplaceShopCdn', 'http://cdn.marketplaceedgeservice.windowsphone.com/');
   base('WPAppsMarketplaceImageService', 'http://cdn.marketplaceimages.windowsphone.com/');
+  // The suggestion base, and it is not optional detail: the endpoint table's
+  // `<ep id="PrefixSearch">` substitutes exactly this setting
+  // (`{WPAppsMarketplaceAutoSuggest}v8/catalog/queries?…&prefix={query}&chunksize=4…`,
+  // FFU @1177094311), and the shipped file answers it with the CDN host on plain
+  // http (@1177028332). Omitting it left the one request this lab still answers
+  // `502` without a base of its own in the document the client is handed (F-041).
+  base('WPAppsMarketplaceAutoSuggest', 'http://cdn.marketplaceedgeservice.windowsphone.com/');
 
   // The store family: the settings the shipped file does *not* carry, which is why
   // this endpoint exists at all. An empty id is left out rather than written blank,
