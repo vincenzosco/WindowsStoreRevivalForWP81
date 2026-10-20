@@ -1,16 +1,16 @@
 # WP Store Lab
 
-Laboratorio di intercettazione per il traffico dello **Store di Windows Phone 8.1**.
-Fa tre cose e nient'altro:
+Laboratorio per intercettare il traffico dello **Store di Windows Phone 8.1**.
+Fa tre cose, e nient'altro:
 
-1. **DNS** — risponde normalmente per tutto, tranne che per i nomi che gli dici tu,
-   che risolve verso questo PC.
-2. **Proxy** — tunnel trasparente di default; decifra TLS **solo** per gli host che
-   gli dici tu. Il resto del traffico del telefono esce identico a prima.
-3. **Patch** — per le richieste intercettate applica regole: passthrough, mock,
-   rewrite, redirect, block. Tutto viene registrato su disco.
+1. **DNS**: risponde normalmente a tutto, tranne ai nomi che gli indichi tu, che
+   risolve verso questo PC.
+2. **Proxy**: tunnel trasparente per default. Decifra TLS **solo** per gli host che
+   gli indichi. Il resto del traffico del telefono esce com'era.
+3. **Patch**: sulle richieste intercettate applica regole (passthrough, mock,
+   rewrite, redirect, block). Ogni cosa finisce su disco.
 
-Zero dipendenze Node: gira sui moduli builtin più il binario `openssl` già presente
+Zero dipendenze Node: gira sui moduli builtin e sul binario `openssl` già presente
 sul sistema.
 
 ---
@@ -28,11 +28,11 @@ sul sistema.
 | Blob di registro per la CA root | ✅ **byte-identico** a quello che produce Windows |
 | Client Zinc (Live Store API) | ✅ 5/5 contro il servizio live, incluso il rifiuto `AC5` |
 | Handler Store (`src/store/`) + bridge catalogo | ✅ verificato |
-| Self-test end-to-end (meccanismi, su 127.0.0.1) | ✅ **97/97** |
+| Self-test end-to-end (meccanismi, su 127.0.0.1) | ✅ **187/187** |
 | Prova di schieramento sui nomi host reali dello Store | ✅ **44/44** |
 | Vocabolario dello Store letto dal telefono, e riverificabile | ✅ **19/19** (`npm run read-vocabulary`) |
 | Cattura reale dallo Store del Lumia (RM-941) | ✅ la pagina viene chiesta, ed è etichettata (`storePages`, `type=003`) |
-| Il telefono **rende** la pagina | ❌ chiede la pagina e poi non chiede più nulla: nessuna immagine, nessun dettaglio |
+| Il telefono **rende** la pagina | ⏳ disegna la testata (è il `<a:title>` del nostro feed) ma non i pane sotto: F-065 → F-067 |
 | Mappatura del protocollo Store vero | ⏳ in corso (la pagina generata è la variabile in prova) |
 
 `npm test` → `node tools/selftest.mjs`.
@@ -45,8 +45,8 @@ sul sistema.
 npm start          # oppure doppio clic su start.cmd
 ```
 
-Se una porta è occupata il server **non parte** e ti dice chi la tiene e come
-liberarla. Su questo PC capita già: vedi "Porta 53" più sotto.
+Se una porta è occupata il server **non parte**. Ti dice chi la tiene e come
+liberarla. Su questo PC succede già: vedi "Porta 53" più sotto.
 
 Apri la dashboard: <http://127.0.0.1:8899/__lab/>
 
@@ -56,13 +56,12 @@ Apri la dashboard: <http://127.0.0.1:8899/__lab/>
 
 ### 1. Porta 53 (già gestita)
 
-Il telefono deve usare questo PC come DNS, e il DNS è per forza sulla **53**.
-Su Windows quel wildcard è spesso già preso dal servizio *Internet Connection
-Sharing* (`svchost` su `0.0.0.0:53`).
+Il telefono deve usare questo PC come DNS, e il DNS sta per forza sulla **53**.
+Su Windows quel wildcard è spesso già occupato da *Internet Connection Sharing*
+(`svchost` su `0.0.0.0:53`).
 
-Il lab **non richiede di fermare quel servizio**: prova prima il bind
-sull'indirizzo LAN e solo dopo sul wildcard, quindi parte comunque e lo dice nel
-log:
+Non serve fermare quel servizio. Il lab prova prima il bind sull'indirizzo LAN e
+solo dopo sul wildcard, quindi parte comunque, e lo scrive nel log:
 
 ```
 DNS listening on 192.168.0.220:53 (udp)
@@ -75,17 +74,16 @@ Se davvero vuoi liberare il wildcard: `sc stop SharedAccess` (o disattiva
 
 ### 2. Come far usare il lab al telefono
 
-**Se il telefono non ti lascia toccare il DNS, non è un problema: cambia il DNS sul
-router.** Metti il DNS di `192.168.0.1` a `192.168.0.220` (o l'opzione DHCP che lo
-annuncia) e *tutti* i dispositivi della rete — telefono compreso — useranno il lab,
-senza configurare nulla sul telefono. Il lab inoltra normalmente ogni nome tranne i
-pochi dello Store, quindi il resto della rete non se ne accorge.
+**Se il telefono non ti fa toccare il DNS, cambia il DNS sul router.** Metti il DNS
+di `192.168.0.1` a `192.168.0.220` (o l'opzione DHCP che lo annuncia) e tutti i
+dispositivi della rete, telefono compreso, passano dal lab senza configurare
+niente sul telefono. Il lab inoltra ogni nome tranne i pochi dello Store, quindi il
+resto della rete non se ne accorge.
 
-Con questa strada **non serve nemmeno impostare il proxy**: il telefono risolve un
-nome dirottato verso questo PC e si connette direttamente alla **443** (e alla **80**, vedi
-sotto), dove il lab
-ha un listener TLS dedicato (`proxy.tlsEnabled`). Verificato: `npm run rehearse`
-prova anche questo percorso.
+Con questa strada non serve nemmeno il proxy. Il telefono risolve un nome dirottato
+verso questo PC e si connette diretto alla **443** (e alla **80**, vedi sotto), dove
+il lab ha un listener TLS dedicato (`proxy.tlsEnabled`). `npm run rehearse` prova
+anche questo percorso.
 
 Se invece puoi configurare il telefono, su WP8.1: **Impostazioni → Wi-Fi → tieni
 premuto sulla rete → modifica → IP statico** (il campo DNS compare solo dopo aver
@@ -187,14 +185,14 @@ perché "non vedo nulla" da solo non basta:
 | righe `tls` | ha raggiunto il lab ma l'handshake è stato **rifiutato**: manca la CA root sul telefono |
 | niente | il telefono punta ancora al router, oppure risolve il nome ma non si connette |
 
-Il caso `tls` è quello che prima restava invisibile: un telefono senza CA root si
-connette benissimo, viene rifiutato durante l'handshake e **non produce nessuna
-cattura**, quindi `watch` sembrava inerte mentre il device stava parlando con il lab.
+Il caso `tls` è quello che prima non si vedeva. Un telefono senza CA root si
+connette senza problemi, viene rifiutato all'handshake e **non produce nessuna
+cattura**, quindi `watch` sembrava fermo mentre il telefono stava parlando con il lab.
 
-Le righe `connect` sono l'unica prova che si ottiene **prima** di installare la CA:
-un host non in `mitm.hosts` viene tunellato byte-per-byte e non viene mai decifrato,
-ma il nome e la porta richiesti restano nel log. È la mappa degli endpoint che il
-dispositivo contatta — utile proprio quando la CA non c'è ancora.
+Le righe `connect` sono l'unica prova che ottieni **prima** di installare la CA. Un
+host fuori da `mitm.hosts` viene tunellato byte per byte e non decifrato, ma il nome
+e la porta restano nel log. È la mappa degli endpoint che il dispositivo contatta, e
+serve proprio quando la CA non c'è ancora.
 
 ### Quando il telefono risolve il nome ma non compare da nessuna parte
 
@@ -289,7 +287,7 @@ perché il tunnel è byte-per-byte e non viene decifrato.
 
 ### Iterazione
 
-Le regole si aggiornano **senza riavviare**: modifica `config.json`, poi
+Le regole si aggiornano **senza riavviare**. Modifica `config.json`, poi lancia
 `POST /__lab/reload`. La connessione del telefono non cade.
 
 ---
@@ -365,9 +363,9 @@ Risponde solo su indirizzi locali.
 
 ## Handler dello Store (`src/store/`)
 
-Questo è il punto di estensione che tutto il lab esiste per alimentare. Il proxy
-consulta il router **prima** delle regole di config: un handler implementa il
-protocollo in codice, tutto ciò che non matcha ricade sul passthrough normale.
+Questo è il punto di estensione per cui esiste tutto il lab. Il proxy consulta il
+router **prima** delle regole di config: un handler implementa il protocollo in
+codice, e quello che non matcha ricade sul passthrough.
 
 ```js
 {
@@ -454,8 +452,8 @@ resta aperto, e i due esperimenti che lo nominano, sono in
 
 #### Perché va servita e non inoltrata
 
-Misurato, non assunto. Interrogando gli host veri da questo PC con un resolver
-pubblico (così il dirottamento del lab non può rispondere al posto loro):
+L'abbiamo misurato, non dato per buono. Interrogando gli host veri da questo PC con
+un resolver pubblico, così il dirottamento del lab non può rispondere al posto loro:
 
 | Nome | Esito |
 |---|---|
@@ -511,6 +509,32 @@ ogni editore che dice `Lab Fixture`, così nessun listino può passare per reale
   pagina che non disegna niente;
 - `src/store/fixtures/sample-catalog.json` — il fixture da tre voci che i test tengono come
   base di regressione. Passare a quello è quella riga lì.
+
+Entrambi sono il *ripiego*. Lo Store che questo telefono apre è quello di sistema, quindi il
+catalogo che deve mostrare è quello del Live Store, non uno store finto di app inventate: è
+questo che decide `livestore.protocol.source`.
+
+```jsonc
+"livestore": {
+  "protocol": {
+    "source": "zinc",                 // "zinc" = catalogo reale, "file" = catalogFile
+    "zinc": { "terms": ["store", "windows", "phone", "live"], "perCategory": 25 }
+  }
+}
+```
+
+La chiave va in `ZINC_API_KEY`, non in `config.json`: quel file è tracciato da git, quindi una
+chiave scritta lì è una chiave nella storia del repository alla prima commit. `livestore.apiKey`
+funziona ancora come seconda scelta.
+
+Zinc non ha un endpoint che elenchi tutte le app — nomina le sue categorie e rifiuta una query
+più corta di cinque caratteri — quindi il catalogo viene **assemblato**: a ogni categoria si
+chiedono pochi termini generici e le risposte si uniscono per id (`src/store/catalog-source.mjs`).
+Contro il servizio reale sono sedici categorie e 203 app in circa quattro secondi, fatti una
+volta all'avvio così la prima richiesta di pagina del telefono non li aspetta. Un guasto del
+Live Store non lascia mai lo Store muto: viene servito il file di catalogo e `x-lab-source`
+sulla risposta dice quale dei due ha risposto e perché — `src/store/fixtures/demo-catalog.json
+(zinc: no api key)` — così un capture si legge sempre come il braccio da cui viene.
 
 `npm run store:page` costruisce la pagina offline e stampa cosa c'è dentro, sezione per
 sezione, con prezzo e valutazione di ogni app. È la risposta a «cosa riceverebbe il
@@ -707,10 +731,10 @@ quindi attribuibile a dove stanno gli item, e a nient'altro.
 
 #### Il flusso dell'account, reso visibile
 
-Una richiesta verso un host che questo lab non possiede non viene catturata: viene messa in
-tunnel, o su questa rete semplicemente esce. Perciò quello che il telefono fa lì è invisibile. Il
-log DNS è l'unica traccia, ed è quello che ha messo sei nomi in `dns.hijack.names` e in
-`proxy.mitm.hosts`, come diagnostica e non come nomi dello Store.
+Una richiesta verso un host che il lab non possiede non viene catturata: va in tunnel, o
+semplicemente esce. Quello che il telefono fa lì resta invisibile. L'unica traccia è il log
+DNS, ed è così che sei nomi sono finiti in `dns.hijack.names` e in `proxy.mitm.hosts` come
+diagnostica, non come nomi dello Store.
 
 Cosa dice il log, e cosa l'intercettazione ha poi smentito. Dopo la terza richiesta di pagina con
 `pageFormat: panes` il telefono ha chiesto lo stack account di Live — `login.live.com`,
@@ -734,21 +758,21 @@ dispositivo per lo stesso motivo. Togliere le righe rimette ogni nome sul percor
 raggiunga il proxy, che il certificato sia emesso per quel nome, e che la richiesta venga
 intercettata e catturata — quindi 44 con i nove nomi dello Store, 68 con i quindici di oggi.
 
-Il verdetto si legge solo sul dispositivo, e solo chi lo tiene in mano può leggerlo:
-`0x88675309` è un assert catch-all (`E_JENNY_JENNY_WHO_CAN_I_TURN_TO` scrive 867-5309, il
-numero di telefono della canzone da cui prende il nome), quindi non nomina nessun guasto
-specifico. Se il messaggio sullo schermo è **cambiato** è l'unica cosa che dice se la forma
-del documento ora è giusta.
+Il verdetto si legge solo sul dispositivo, e solo chi lo tiene in mano può leggerlo.
+`0x88675309` è un assert catch-all: `E_JENNY_JENNY_WHO_CAN_I_TURN_TO` scrive 867-5309, il
+numero di telefono della canzone da cui prende il nome, quindi non nomina nessun guasto in
+particolare. Se il messaggio sullo schermo **cambia**, è l'unica cosa che dice se la forma del
+documento è quella giusta.
 
 Per leggere il verdetto si va sul dispositivo: apri lo Store con il lab acceso e guarda cosa
 chiede dopo — `npm run watch` mostra il traffico del device, e
 `captures/session-*/index.jsonl` conserva sia la richiesta sia la pagina che gli è stata
 servita.
 
-Quello che **non** fa, detto chiaramente perché uno Store che si apre non è uno Store che
-installa: serve le superfici di navigazione — home page, pagine hub, liste di applicazioni
-e il dettaglio di un GUID che ha coniato lui. Immagini, licenze e download non sono serviti,
-quindi un'applicazione toccata sul dispositivo arriva a una pagina di dettaglio e non oltre.
+C'è una cosa che **non** fa, e vale la pena dirla: uno Store che si apre non è uno Store che
+installa. Il lab serve le superfici di navigazione, cioè home page, pagine hub, liste di
+applicazioni e il dettaglio di un GUID coniato da lui. Immagini, licenze e download non sono
+serviti, quindi un'app toccata sul dispositivo arriva alla pagina di dettaglio e si ferma lì.
 
 ---
 
@@ -777,12 +801,12 @@ usato dai futuri handler.
 
 ## Perché "meta" dello Store non basta
 
-Lo Store di WP8.1 parla un protocollo proprietario (SOAP/XML verso i front-end
-`wscont*.apps.microsoft.com`, catalogo Zune, licensing). Il backend Microsoft è
-**spento dal 16/12/2019**: non esiste una API viva che restituisca quel catalogo.
+Lo Store di WP8.1 parla un protocollo proprietario: SOAP/XML verso i front-end
+`wscont*.apps.microsoft.com`, catalogo Zune, licensing. Il backend Microsoft è
+**spento dal 16/12/2019**, quindi non c'è un'API viva che restituisca quel catalogo.
 
-Quindi "far credere allo Store che non sia mai chiuso" significa *riscrivere quel
-protocollo* mappandolo sul catalogo Zinc. Servono, in quest'ordine:
+"Far credere allo Store che non sia mai chiuso" vuol dire riscrivere quel protocollo
+mappandolo sul catalogo Zinc. Servono, in quest'ordine:
 
 1. il traffico vero (che è esattamente ciò che questo lab produce);
 2. l'API key di Zinc;
