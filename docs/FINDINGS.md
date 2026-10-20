@@ -1715,17 +1715,19 @@ Each one changes **a single variable**, and each names the value it replaced so 
   tile's art is bound. Nothing here observes that parse, so the mechanism is unproven. The one confound is named: the images handler
   went from `502` on 10-17 to `200` today, and a `502` cannot *suppress* a request - it caused 240 of them - so it cannot be the
   reason there were none. Two data points, one variable, one confound that points the other way.
-- **The single variable now armed** `livestore.protocol.offerMediaInstance` is `false` again (`config.json`, the command in the
-  comment, and this entry's Undo). The reading is one Store open and the same search: if the list asks for `icon_small` again, the
+- **The single variable now armed** `livestore.protocol.offerMediaInstance` is `false` again (`config.json`; the value it left, `true`,
+  is in this entry's Undo and in the comment beside the flag). The reading is one Store open and the same search: if the list asks for `icon_small` again, the
   field was the regression and F-033's hypothesis is dead with a cost named; if it does not, the field is not the cause and the next
   candidate is the list's own art path, which has never been given a `200` to draw.
-- **Does not establish** That the client would *draw* our bitmap in a list at all: `icon_small` has been requested 800 times across
-  every session and answered `502` every time before today, so a list tile drawing this lab's picture is something no run has shown.
+- **Does not establish** That the client would *draw* our bitmap in a list at all: `icon_small` has been requested **800** times across
+  every session and answered `502` on every one of them - today it was requested none - so a list tile drawing this lab's picture is
+  something no run has shown yet, whatever this arm answers.
   Nor that `mediaInstanceId` is the cause - that is what the armed arm is for. And nothing here touches the home page: `storePages`
   answered `200` again at `04:56:18` and still produced no model, which is the same silence F-027 left off at, on a different endpoint
   from the one this entry is about.
-- **Undo** `offerMediaInstance` back to `false` and `POST /__lab/reload` - measured, not asserted: the flag is read per request, so a
-  reload is enough and the earlier note that said "restart" was wrong. The comment in `config.json` carries the old value.
+- **Undo** `offerMediaInstance` back to **`true`** - the value this entry moved it off - and `POST /__lab/reload`; that returns the
+  lab to F-033's arm, whose install reading is still pending. Measured, not asserted: a reload is enough because the flag is read per
+  request, so the "restart" the old comment asked for was wrong, and the config comment now says so.
 
 
 ## Open experiments, continued
