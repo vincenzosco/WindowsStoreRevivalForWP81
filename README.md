@@ -34,9 +34,9 @@ a name, and it carries a `<Panes>` block the generated page had been missing. Se
 [The vocabulary, read from the phone](#the-vocabulary-read-from-the-phone).
 
 The home page now draws on the handset, but only its header. What you see is the feed's own
-`<a:title>`, so the client does parse our document and paint it. The panes below are still
-empty, and that is the open question. `docs/FINDINGS.md` records what changed and why, under
-F-065 to F-067.
+`<a:title>`, so the client does parse our document and paint it. The title is the name this lab
+chooses, and it is now `Windows Store`. The panes below are still empty, and that is the open
+question. `docs/FINDINGS.md` records what changed and why, under F-065 to F-068.
 
 That fetch is measured on the phone, not inferred from this side. In mass storage the client's
 response cache is readable. `Data\SharedData\EdmCache\Short\0` holds the `storePages` answer,

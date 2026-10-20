@@ -32,7 +32,7 @@ sul sistema.
 | Prova di schieramento sui nomi host reali dello Store | ✅ **44/44** |
 | Vocabolario dello Store letto dal telefono, e riverificabile | ✅ **19/19** (`npm run read-vocabulary`) |
 | Cattura reale dallo Store del Lumia (RM-941) | ✅ la pagina viene chiesta, ed è etichettata (`storePages`, `type=003`) |
-| Il telefono **rende** la pagina | ⏳ disegna la testata (è il `<a:title>` del nostro feed) ma non i pane sotto: F-065 → F-067 |
+| Il telefono **rende** la pagina | ⏳ disegna la testata (è il `<a:title>` del nostro feed, ora `Windows Store`) ma non i pane sotto: F-065 → F-068 |
 | Mappatura del protocollo Store vero | ⏳ in corso (la pagina generata è la variabile in prova) |
 
 `npm test` → `node tools/selftest.mjs`.

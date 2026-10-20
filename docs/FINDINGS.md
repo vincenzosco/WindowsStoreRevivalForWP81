@@ -1,7 +1,7 @@
 # Findings
 
-What we know about this phone, the Store and the lab — each entry with the method that showed
-it and, just as important, the line that says what it does **not** show. Rules for adding one
+What we know about this phone, the Store and the lab. Each entry carries the method that showed
+it and, just as important, the line that says what it does **not** show. The rules for adding one
 are in [`README.md`](README.md).
 
 Device under measurement: Nokia Lumia 625 (RM-941), Windows Phone 8.1 Update 2, `os=8.10.14219.0`,
@@ -32,7 +32,7 @@ same event appears as `17:56:07` local and `15:56:07Z`.
 | The served response that file matches | `bodies/0117-res.bin`, 55234 bytes, SHA-256 `38E904A1F685AE9F9E1B71DF3B809A951D798BD5461E604FDCBBBD1355ED4FBE` — the delivery at `2026-10-15T18:47:27.289Z` | `captures/session-2026-10-15_15-36-48/index.jsonl` + `bodies/`, `sha256sum` |
 | What the device wrote about the Store in the whole session | **one** file — the cached page above. 84 files under `Data` since 17:00, 18 past the hive/telemetry/ETW filter, 1 of them Store-related | elevated readout, 2026-10-15 21:05 |
 | Page built today from the fixture | 29893 bytes, identical except `<a:updated>` | `npm run store:page`, `.selftest/cmp.fresh.txt` |
-| Checks in the suite | 169, all passing | `npm run selftest`, 2026-10-20 (155 before F-037 to F-041 added six; four with F-044, two with F-046, one with F-048, one with F-049) |
+| Checks in the suite | 190, all passing | `npm run selftest`, 2026-10-20 (155 before F-037 to F-041 added six; each later entry records the count it closed at, and the last two hold the source order of the Live Store key, F-069) |
 | Exchanges in `captures/` | 487 480 over 28 sessions, of which **109 are a device's** - 99.98 % of the index is this PC | `npm run analyze -- --all-sessions`, 2026-10-16 |
 | DNS records in the same capture | 19 615 from 21 addresses, and only **8 639** are this PC's - a `.151` that asks for `a.root-servers.net` 6 437 times, not the phone | same command |
 | Devices the requests identify in that capture | **two** handsets: `x-wp-device-id 40752FED…5A1872` (the one above) and `3499541B…EEA32B`, `os=8.10.14226.0`, `dm=RM-941_eu_hungary_356`; the two overlap for 2 h 38 m on 2026-10-15 | same command |
@@ -52,8 +52,8 @@ same event appears as `17:56:07` local and `15:56:07Z`.
   `wscont*.apps.microsoft.com` are NXDOMAIN; `cdn.marketplaceedgeservice.windowsphone.com` still
   resolves to Akamai and answers `503 Service Unavailable - DNS failure`. Reproduced in `README.md`
   under *Status*, and re-checked by `npm run rehearse`.
-- **Conclusion** The front door is up and the origin is gone. Forwarding cannot help; the page is
-  built in `src/store/` and served.
+- **Conclusion** The front door is up and the origin is gone, so forwarding cannot help. The page
+  is built in `src/store/` and served.
 - **Does not establish** Whether a *different* Microsoft host still serves any part of the old
   protocol. Nothing found so far does, and nothing here has been tested against a live Store.
 
@@ -76,7 +76,7 @@ same event appears as `17:56:07` local and `15:56:07Z`.
 ## F-003 The client's own cache is readable, and it holds the page we served
 
 - **Date** 2026-10-15 · **Area** device evidence
-- **Question** Can we see, from the device itself, that the page arrived — instead of inferring it
+- **Question** Can we see, from the device itself, that the page arrived, instead of inferring it
   from the PC side?
 - **Method** Phone in mass storage mode; elevated readout of the whole device tree, with the
   relevant files copied out: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/phone-readout.ps1`.
@@ -140,8 +140,8 @@ same event appears as `17:56:07` local and `15:56:07Z`.
 - **Conclusion** The app's own state is not readable by taking the drive; it would need an
   ownership change (**a write** to the phone's filesystem, and not one this project has done).
 - **Does not establish** That the state would be informative if read. It is simply not available
-  this way, and that is why the readable signals - `EdmCache`, `Public\Documents`, the exported
-  logs - are the ones this register uses.
+  this way, which is why this register uses the readable signals: `EdmCache`, `Public\Documents` and
+  the exported logs.
 
 ## F-005 The client fetches the page and never asks for anything else
 
@@ -157,9 +157,9 @@ same event appears as `17:56:07` local and `15:56:07Z`.
   longer earlier build). Between 18:30:34 and 18:33:23 local it asked three times in under three
   minutes and then stopped. **No follow-up request of any kind** - no image from
   `marketplaceimages`, no detail page, no `POST /v8/catalog/updates`.
-- **Conclusion** Delivery works and the page is not being turned into content: the client re-fetches
+- **Conclusion** Delivery works, and the page is not being turned into content. The client re-fetches
   on a one-to-two-minute cycle instead of rendering and moving on. What the user sees on screen is
-  that cycle - a Store that keeps loading.
+  that cycle: a Store that keeps loading.
 - **Does not establish** *Why*. An unparsed page and a parsed-but-empty page look the same from
   here, and the reader is denied the client's own state (F-004). The candidate variables are
   recorded as open experiments below, one at a time.
@@ -191,8 +191,8 @@ same event appears as `17:56:07` local and `15:56:07Z`.
   `TEST FAIL: BCD: Found banned Element BCDE_LIBRARY_TYPE_DISABLE_INTEGRITY_CHECKS`,
   `TEST FAIL: UMCIAuditMode is Enabled`, `TEST FAIL: UEFIVariable: SecureBoot is not enabled`,
   `TEST FAIL: Secure Boot is not provisioned for Bitlocker, the binding state is 0x00000000`.
-- **Conclusion** That is the device's unlock state - integrity checks off, UMCI audit on, Secure
-  Boot off - written by the factory self-test, and it says nothing about the Store. The file's
+- **Conclusion** That is the device's unlock state: integrity checks off, UMCI audit on, Secure
+  Boot off. The factory self-test wrote it, and it says nothing about the Store. The file's
   stamp is a boot/shutdown event, not a Store event. **That reading was confirmed the same
   evening**: the same bytes came back with the stamp `18:20:36`, eight minutes later and with
   nothing in between but the phone being halted for mass storage mode - same content, new stamp,
@@ -210,7 +210,7 @@ same event appears as `17:56:07` local and `15:56:07Z`.
 - **Evidence** Both are 374 bytes and **byte-identical**: SHA-256
   `5D2FD67878685B09465E479AB19438EE85132E587250F76E0D145346AD2685F2`, dated 2016-12-25 21:45:35 and
   2026-10-15 17:51:23. The content is `Cellular`/EDM modem XML (IMEI, capability bytes).
-- **Conclusion** The same keeper, re-written. Its proximity to the page fetch is coincidence; it
+- **Conclusion** The same keeper, re-written. Its proximity to the page fetch is a coincidence: it
   happens on an EDM evaluation, not on a Store request.
 - **Does not establish** What triggers the rewrite, which nothing here needed to know.
 
@@ -224,8 +224,8 @@ same event appears as `17:56:07` local and `15:56:07Z`.
   `NotSupportedException: DllImport cannot be used on user-defined methods`. Registry read, registry
   write and the certificate-store API all report `False`.
 - **Conclusion** The app could never write the certificate store, and could not read it either.
-  What was left - writing the import file onto the phone for the phone's own console - costs a cable
-  and a boot and lands on the same certificate the hive edit puts in place. The app
+  What was left was writing the import file onto the phone for the phone's own console, which costs a
+  cable and a boot and lands on the same certificate the hive edit puts in place. The app
   (`StorePatcher/`, `tools/app.mjs`) was removed from the repository on 2026-10-15.
 - **Does not establish** That no mechanism exists. A native component or a full-trust deployment
   would, and both are still blocked: the WP8.1 ARM compiler is not installed on this machine.
@@ -346,7 +346,7 @@ same event appears as `17:56:07` local and `15:56:07Z`.
 - **Question** E-001's question: is the reason the client does not render that each pane points at
   content the client is expected to resolve, rather than carrying it inline as the archived response did?
 - **Method** `livestore.protocol.pageFormat` set to `panes` in `config.json`, lab hot-reloaded, and the
-  device's own requests read per exchange — by `client.address` and `user-agent`, which is what makes them
+  device's own requests read per exchange, by `client.address` and `user-agent`, which is what makes them
   the device's (F-012). The verdict is what the device asks for *after* each delivery.
 - **Evidence** The device was served the `panes` document **six times over three hours**, each time
   `200`, `x-lab-page-format: panes`, 55234 bytes: 17:37:19, 17:37:30 and 17:37:43 local, then 18:37:57 and
@@ -355,19 +355,19 @@ same event appears as `17:56:07` local and `15:56:07Z`.
   or an hour later, was the same page again. In the same session it also met the `storePage` shape seven
   times (29893 bytes, 17:48-18:33): same behaviour, same silence. The two shapes are the only difference
   between those deliveries, and the device's answer was identical.
-- **Conclusion** The hypothesis is removed: the client is not waiting for the items to be carried inline,
-  and the arrangement of what the page contains is not what stops it. The variable list for the document
-  narrows to the one thing the vocabulary itself flags as undecided — `templateTypeForm` — and to causes
+- **Conclusion** The hypothesis is removed. The client is not waiting for the items to be carried inline,
+  and the arrangement of the page's contents is not what stops it. The variables left are the one the
+  vocabulary itself flags as undecided (`templateTypeForm`) and the causes that sit
   outside the document entirely (E-003).
-- **Does not establish** That the `panes` shape is *wrong*; it was never shown to be right either. Nothing
-  here shows the client parses the page at all, and the two shapes failing the same way is as consistent
-  with a failure before the parse as with one inside it.
+- **Does not establish** That the `panes` shape is *wrong*. Nothing here shows it was right either, and
+  nothing shows the client parses the page at all. Two shapes failing the same way fits a failure before the
+  parse as well as one inside it.
 
 ## F-015 The only thing the device wrote about the Store was the page itself
 
 - **Date** 2026-10-15 · **Area** device evidence (the device-side bound on F-005)
 - **Question** The client re-fetches the page and never settles (F-005). Whatever it is doing with each
-  delivery, does it *write* anything down — a state file, an index, a log, a crash report?
+  delivery, does it *write* anything down: a state file, an index, a log, a crash report?
 - **Method** Phone in mass storage, elevated, sweep of the whole `Data` tree modified after a threshold set
   before the session: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/phone-readout.ps1
   -Since "2026-10-15 17:00" -Keepers`, with registry hives, telemetry and ETW blobs filtered out and files
@@ -416,7 +416,7 @@ same event appears as `17:56:07` local and `15:56:07Z`.
   `H: … punti 6  marker: \Data\SharedData\EdmCache + \Data\Users\Public + \Data\SharedData + \Windows\…\SOFTWARE`,
   `C: … punti 0 … <- questa macchina`, `volume scelto : H:  (punti 6)`.
 - **Conclusion** A heuristic device probe has to print *why* it chose what it chose, and the choice has to be
-  falsifiable from the report alone — otherwise its worst failure is not an error but a confident report
+  falsifiable from the report alone. Otherwise its worst failure is not an error but a confident report
   about the wrong machine, and the person reading it cannot tell the difference. `\Data\Users\Public` and
   `\Data\SharedData` carry weight because a Windows *installation* does not ship them, not because nothing
   else can have them; the hive is the one marker that only ever distinguishes an unlocked phone from a
@@ -430,7 +430,7 @@ same event appears as `17:56:07` local and `15:56:07Z`.
 
 - **Date** 2026-10-15 · **Area** page grammar (the part F-013 left open)
 - **Question** F-013 walked the paths the parser names and found the page carries all of them. Are there things
-  the same binary settles that no path walk can see - an element nothing reads, a token that is not a path, a
+  the same binary settles that no path walk can see: an element nothing reads, a token that is not a path, a
   field the real service sends that the page does not?
 - **Method** Read the *whole* run of path strings out of `H:\Windows\System32\ZMarketplace.dll` (all 264, not the
   page family alone), the two string runs in `ZuneAssets480x800.dll`, and the two `Lib` entries of 2026-10-07 that
@@ -472,9 +472,9 @@ same event appears as `17:56:07` local and `15:56:07Z`.
 ## F-018 The lab was answering 502 on the Store's own account path
 
 - **Date** 2026-10-15 · **Area** harness (a failure the lab injects, not one it observes)
-- **Question** Five names on the hijack and MITM lists are there as a *diagnostic* - to make traffic visible that
-  would otherwise be a tunnel. Three of them are alive on the real network. What does the device get from them,
-  and what does a lab that wants a page *rendered* owe the client on its own account path?
+- **Question** Five names on the hijack and MITM lists are there as a *diagnostic*, to make traffic visible
+  that would otherwise be a tunnel. Three of them are alive on the real network. What does the device get from
+  them, and what does a lab that wants a page *rendered* owe the client on its own account path?
 - **Method** Read the device's exchanges out of every capture session by streaming each `index.jsonl` (one session
   is over 512 MB, so a read is not possible) and keeping only `client.address = 192.168.0.136` (F-012), then
   remove the five names from both lists in `config.json`, reload, and read `/__lab/status` back.
@@ -497,11 +497,11 @@ same event appears as `17:56:07` local and `15:56:07Z`.
 ## F-019 The screen, read at last: the client builds no model at all
 
 - **Date** 2026-10-15 22:05 local (21:22 UTC delivery) · **Area** Store client behaviour (the witness E-003 asked for)
-- **Question** Every finding in this file records what the device *asks*. Nothing recorded what it *displays*, and for a
-  client whose failure is silent that is the difference between "it built nothing" and "it built something it cannot
-  draw".
+- **Question** Every finding in this file records what the device *asks*. Nothing recorded what it *displays*.
+  For a client whose failure is silent, that is the difference between "it built nothing" and "it built
+  something it cannot draw".
 - **Method** One Store open on the phone (Lumia 625) with the lab armed, and the screen read by the operator:
-  *"vuoto, o rotella che gira"* - empty, or a spinner that keeps turning. Nothing else was touched.
+  *"vuoto, o rotella che gira"*, empty, or a spinner that keeps turning. Nothing else was touched.
 - **Evidence** Taken together with F-005 (the client fetches the page and asks for nothing else - no image from
   `marketplaceimages`, no detail page, no update check) and F-003 (the page it was served is in its own cache), the
   reading says the client never arrives at a model: a hub that had been built would show section titles even with
@@ -524,8 +524,8 @@ Each one changes **a single variable**, and each names the value it replaced so 
 ### E-001 `pageFormat`: `storePage` → `panes`
 
 - **Why** This is the difference between the generated page and the archived response of the older
-  generation: in `panes`, each pane also carries its own `editorialItems` and `applications`
-  inline, so the client is never asked to resolve a reference to content it has already been sent.
+  generation. In `panes`, each pane carries its own `editorialItems` and `applications` inline, so the client
+  is never asked to resolve a reference to content it already has.
 - **State ARMED** Changed in `config.json` (`livestore.protocol.pageFormat`), lab hot-reloaded, and
   the answer verified **from the PC**: `x-lab-page-format: panes`, 55234 bytes, 8 sections, and 17 of
   the document's 34 items now sit inside `<Panes>`. The next Store open on the phone gets this page,
@@ -557,10 +557,10 @@ Each one changes **a single variable**, and each names the value it replaced so 
   Store's own account and configuration path, on hosts that are alive on the real network, and the config's
   own comment says so and says how to undo it.
 - **The measurement that is missing, and costs one sentence** What the phone's **screen** shows after a page
-  is delivered. Every finding here records what the device *asks*; nothing records what it *displays*, and
-  the screen is the one witness that has never been read - for a client whose answer is an assert code, it
-  is also the only place that code would appear. Worth taking before either variable: it costs one Store
-  open, and it can turn two coin flips into a directed test.
+  is delivered. Every finding here records what the device *asks*; nothing records what it *displays*. The
+  screen is the one witness nobody has read, and for a client whose answer is an assert code it is also the
+  only place that code would appear. Take it before either variable: it costs one Store open and can turn two
+  coin flips into a directed test.
 - **Variables, one at a time**
   1. `livestore.protocol.templateTypeForm`: `both` → `attribute`. One line; undo is the value it replaced.
   2. Remove the five `502`-injecting names from `dns.hijack.names` **and** `proxy.mitm.hosts`
@@ -812,12 +812,12 @@ Each one changes **a single variable**, and each names the value it replaced so 
     was rewritten **2026-10-15 22:40:32** and holds the production self-test log (banned BCD element, UMCIAuditMode
     enabled, SecureBoot not provisioned) - a boot, not the Store. It is not a Store report and E-002's conclusion
     stands.
-- **Conclusion** The one artefact this project has been missing - a page of the real service - is **not on this
-  phone**, and the readout that was going to be the next move is now closed as a source of it. What the readout
-  did establish is that the client stores, keys and caches what this lab sends, and that its own registry holds
-  the cookie: the client's *download and storage* path runs on our responses, while nothing after it does.
+- **Conclusion** The one artefact this project has been missing, a page of the real service, is **not on this
+  phone**, and the readout is now closed as a source of it. What it did establish is that the client stores,
+  keys and caches what this lab sends, and that its own registry holds the cookie. Its *download and storage*
+  path runs on our responses; nothing after that path does.
 - **Does not establish** Anything about why the parse produces no model. It removes the EdmCache as a place to
-  look and leaves the client's behaviour, the binary, and the delivered document as the only three witnesses.
+  look and leaves three witnesses: the client's behaviour, the binary and the delivered document.
 - **Repeatable** One elevated pass with the phone in mass storage; read-only on the phone, output under
   `%TEMP%\wp-massstorage\phone-read\`.
 
@@ -838,8 +838,8 @@ Each one changes **a single variable**, and each names the value it replaced so 
 - **Verified from the PC** The lab hot-reloaded (config only, no restart): `x-lab-pane-type: Collection`,
   `<Type>Collection</Type>` in all eight panes, `x-lab-pane-sources: Applications`, 8/8 sources still answering.
   `npm run selftest` **107/107** with the suite's own config armed to the same value.
-- **What to read** The same single reading: does the device, after the page, ask for a URL the page named? If it
-  does, the pane's own type was the gate and every earlier negative was a pane the client could not materialise.
+- **What to read** The same single reading: after the page, does the device ask for a URL the page named? If it
+  does, the pane's own type was the gate, and every earlier negative was a pane the client could not materialise.
 - **Result NEGATIVE, 2026-10-16 05:30:46 UTC.** The device (`192.168.0.137`) fetched the page **once** and was
   answered `200`, `content-length: 58555`, `x-lab-pane-type: Collection`, `x-lab-pane-sources: Applications` -
   i.e. eight panes each declaring a type the page parser holds *and* a source whose URL resolves here - and then
@@ -1181,9 +1181,10 @@ Each one changes **a single variable**, and each names the value it replaced so 
 
 ## F-025 The phone took the page and stopped, and it never asked for the configuration
 
-- **Why** "The Store spins forever" is the shape of a failure that looks the same from four different causes - no DNS, a dead
-  host, a page that is refused, a page that is accepted and not rendered. The first three leave a mark in the capture and the fourth
-  does not, so the question is settled by reading the session rather than by reasoning about it.
+- **Why** "The Store spins forever" is the shape of a failure that looks the same from four different causes:
+  no DNS, a dead host, a page that is refused, a page that is accepted and not rendered. The first three leave a
+  mark in the capture and the fourth does not, so the question is settled by reading the session rather than by
+  reasoning about it.
 - **What the session holds** One session, `session-2026-10-17_12-01-38`, five exchanges, two of them the handset's: at
   `12:06:32.800Z` `GET https://ssl-api.bing.com/winphone/clientconfig/rwsettingbluegdr1qfex.xml` - passthrough, `502`, the
   documented dead host (F-006) - and at `12:06:46.867Z` `GET http://cdn.marketplaceedgeservice.windowsphone.com/v9/catalog/storePages?typeId=DynamicHub.Main&os=8.10.14219.0&cc=IT&lang=it-IT&hw=402699266&dm=RM-941_eu_france_308&oemId=NOKIA&moId=`
@@ -1214,11 +1215,11 @@ Each one changes **a single variable**, and each names the value it replaced so 
   `PROD`/`DF`/`INT`/`PartnerNet`/`CertNet`, then `XuidMarketization`/`Xbox`/`Zest`/`WPSMarketization`/`WPS`/`WMIS`), and the other a
   WMI trace file. That document carries every `WPAppsMarketplace*` base and **no** store setting: `OEMStoreID`, `MOStoreID`,
   `MOUniqueID` are absent from `PROD` too, and `CatalogLocale` exists only as a per-market map (`<setting id="CatalogLocale"
-  XuidMarket="it-CH">de-CH</setting>` under `XuidMarketization`), which is why the served document writes no locale.
-- **Does not establish** Why the client renders nothing from a page it accepted. The page was not compared against the parser's
-  expected tree in this pass, and nothing here tells a body that parses into an empty model from one that fails late. Nor that the
-  cached override is the *old invented* document - it might be the stock one from a previous successful fetch - so the value to read
-  before deleting is the cached string itself, and the mass-storage hive read is what would show it.
+  XuidMarket="it-CH">de-CH</setting>` under `XuidMarketization`), which is why the served document writes no locale.- **Does not establish** Why the client renders nothing from a page it accepted. The page was not compared
+  against the parser's expected tree in this pass, and nothing here separates a body that parses into an empty
+  model from one that fails late. Nor that the cached override is the *old invented* document: it might be the
+  stock one from a previous successful fetch. The value to read before deleting is the cached string itself,
+  and the mass-storage hive read is what would show it.
 - **Retracted 2026-10-17 14:44, and the retraction is the useful part** The hive was read: **there is no cached override at all**
   (F-026). The reading above that "its configuration therefore came from the cached override" was inference from a missing request,
   and the cache it supposed was empty - it can only be written after a configuration answer arrives, and on 2026-10-17 at 12:06 the
@@ -1285,7 +1286,6 @@ Each one changes **a single variable**, and each names the value it replaced so 
   so the negative above is "not in any hive that can be read", never "not on the device". Nor what the `9` in the cache path means -
   it is the only bucket digit seen other than `0`. Nor that the client will not write an override after it accepts a configuration:
   that write is what a successful E-009 run should produce, and it would be visible in the same hive.
-
 
 ## F-027 The control drew an error and the page drew silence: the client parses
 
@@ -1397,13 +1397,13 @@ Each one changes **a single variable**, and each names the value it replaced so 
   fetched by a client that names a build. The payloads also carry the operator's notice that the API cannot be used without
   written permission, so the bodies stay in `%TEMP%` and only their shape is recorded - `defapps-readout/contract.txt` states
   routes, item fields and counts, and `me[1].json` (a name, an e-mail, a developer id) is not reproduced at all.
-- **Why this matters to the page question** Not as an answer: as the end of one line of inquiry. The client the lab has been
-  feeding is not the client that works on this handset, and the storage that was supposed to hold its state holds another
-  product's cache. Nine documents have been delivered and none produced a model; the next surface is not DefApps, and the
+- **Why this matters to the page question** It ends one line of inquiry; it does not answer it. The client the lab has been
+  feeding is not the client that works on this handset. The storage that should have held its state holds another product's
+  cache. Nine documents have been delivered and none produced a model, so the next surface is not DefApps, and the
   cheapest remaining lever is still the one E-010 named - whether *any* document makes `ZMarketplace` ask for something.
-- **Does not establish** That the Store's model cannot be built - only that this storage does not hold it, so the reason is
-  elsewhere (the client's code, the registry it does write, or a validation that runs in memory). Nor the LSS client's build or
-  identity beyond the package SID in its own authorize URL, which was not resolved to a package family name: the app's binaries
+- **Does not establish** That the Store's model cannot be built. This storage does not hold it, so the reason is
+  elsewhere: the client's code, the registry it does write, or a validation that runs in memory. Nor the LSS client's build or
+  identity beyond the package SID in its own authorize URL, which was not resolved to a package family name. The app's binaries
   were not read, and that is the one thing in this entry that was seen from far away.
 
 
@@ -1442,10 +1442,10 @@ Each one changes **a single variable**, and each names the value it replaced so 
   Disarmed again in the same minute: the same request is passed through to the real service (`301`, Cloudflare) with no lab
   header, and the phone's own page endpoint is untouched (`200`, 58 339 bytes, `x-lab-protocol: storePages`).
 - **Why this is worth having even though it answers a different client** It is the first thing in this project that serves a
-  protocol *some* client on this handset demonstrably parses and renders from - the same catalog the page endpoint has been
-  failing to get a model out of. If the page question ever needs an oracle for "is this client-side or server-side", this
-  endpoint is one: it delivers the same invented store to the client that works, and the difference between what that client
-  draws and what `ZMarketplace` draws is the difference between the two protocols and not between the catalogues.
+  protocol *some* client on this handset demonstrably parses and renders from. That is the same catalog the page endpoint has
+  failed to get a model out of. If the page question ever needs an oracle for "is this client-side or server-side", this
+  endpoint is one. It delivers the same invented store to the client that works, so the difference between what that client
+  draws and what `ZMarketplace` draws is the difference between the two protocols, not between the catalogues.
 - **Does not establish** That the client parses any of it. The keys are the cache's; the *values* are the fixture's, and a
   client that wants artwork, a download URL or a variant may reject the document exactly where the fabricated parts are -
   which is the device test not yet made, and it needs the three touchpoints armed. Nor the meaning of the `VC1` refusal an
@@ -1569,8 +1569,8 @@ Each one changes **a single variable**, and each names the value it replaced so 
      likely since F-027 (the control drew an error, so the client parses) and F-026 (the cookie round-trips), and
      kept last because each of those is a single observation.
 - **Does not establish** Which of the two spellings the client accepts. Whether the pane parser runs at all for
-  this document, or requires any of the four absent fields. Nothing here is a claim that the page *should* render:
-  it is a statement of what the document contains, checked against what the binary says the client looks for.
+  this document, or requires any of the four absent fields. Nothing here claims the page *should* render. It is a
+  statement of what the document contains, checked against what the binary says the client looks for.
 
 ## F-033 An install attempt asks for nothing new: the account wall is not (yet) a network event
 
@@ -1625,7 +1625,7 @@ Each one changes **a single variable**, and each names the value it replaced so 
   deliberately not hijacked (E-004) - signing in is the one part of this chain that may still work, and it would
   move the wall to the licensing call that follows it, which is the request worth having.
 - **Does not establish** That the app cannot be installed without an account, that Microsoft's licensing service is
-  reachable, or that a licence can be satisfied from this lab. Nothing in this entry is about signatures; it is
+  reachable, or that a licence can be satisfied from this lab. Nothing in this entry is about signatures. It is
   about who the phone talked to, and the answer is: only this lab.
 
 
@@ -1656,10 +1656,10 @@ Each one changes **a single variable**, and each names the value it replaced so 
   `x-lab-invented: 1` on every answer. A body that is not base64 is refused by a round-trip comparison rather than by Node's tolerant
   decoder, because a text body would otherwise become mystery bytes and reach openssl as an error nobody can attribute.
 - **The part that had to be decided rather than copied, and it is a security decision** `openssl x509 -req -copy_extensions copy`
-  is the obvious way to sign whatever was asked for, and on a CA that is trusted by the phone for TLS interception it is a way to
-  mint a certificate for `login.live.com` from a request anyone on the LAN can send. So the extensions are **fixed** in the signer -
-  `basicConstraints=critical,CA:FALSE`, `keyUsage=digitalSignature,keyEncipherment`, `extendedKeyUsage=clientAuth`, no SAN - and the
-  request's own are never copied. The selftest sends a CSR that asks for `CA:TRUE` **and** `subjectAltName=DNS:login.live.com` and fails
+  is the obvious way to sign whatever was asked for. On a CA the phone trusts for TLS interception, it is also a way to
+  mint a certificate for `login.live.com` from a request anyone on the LAN can send. So the extensions are **fixed** in the signer:
+  `basicConstraints=critical,CA:FALSE`, `keyUsage=digitalSignature,keyEncipherment`, `extendedKeyUsage=clientAuth`, and no SAN.
+  The request's own are never copied. The selftest sends a CSR that asks for `CA:TRUE` **and** `subjectAltName=DNS:login.live.com` and fails
   if either appears in the issued certificate.
 - **Verified, live, on both listeners** Armed (`enabled: true`, the host added to `proxy.mitm.hosts` and `dns.hijack.names`, then
   `POST /__lab/reload` - no restart, so the phone's connection was never dropped): `POST http://127.0.0.1:80/dcs/certificaterequest` with
@@ -1710,7 +1710,7 @@ Each one changes **a single variable**, and each names the value it replaced so 
   evening for the install hypothesis (F-033), which is the only structural difference between the list that produced 240 icon
   requests and the list that produced none. Its *spelling* is not the difference: both archives (the 2013 page and the v8 list) write
   exactly `urn:uuid:<uuid>`, and so do we.
-- **Inferred, and it stays an inference** The extra element inside the offer is the prime suspect: a plausible mechanism is that the
+- **Inferred, and it stays an inference** The extra element inside the offer is the prime suspect. A plausible mechanism is that the
   client builds the entry, keeps the fields it already read (the app is listed, with its name and publisher), and stops before the
   tile's art is bound. Nothing here observes that parse, so the mechanism is unproven. The one confound is named: the images handler
   went from `502` on 10-17 to `200` today, and a `502` cannot *suppress* a request - it caused 240 of them - so it cannot be the
@@ -1777,8 +1777,8 @@ Each one changes **a single variable**, and each names the value it replaced so 
   and means page work is not wasted. `serve` was returned to `generated` and reloaded the same minute (`200`,
   `content-length: 58555`), so the next open is a normal one. See F-027 for the code and its limits.
 - **Undo** `livestore.protocol.serve` back to `"generated"` and `POST /__lab/reload`.
-- **Does not establish** Anything about the device yet - this is a control, not a reading. And a *negative*
-  reading here does not prove the client has no parser: a client may discard a malformed body before any parse
+- **Does not establish** Anything about the device yet: this is a control, not a reading. A *negative*
+  reading here does not prove the client has no parser. A client may discard a malformed body before any parse
   attempt and still parse the next well-formed one, which is why the control is compared with a delivery in the
   same configuration state rather than with the historical record.
 
@@ -1884,7 +1884,7 @@ Each one changes **a single variable**, and each names the value it replaced so 
   this handset.
 - **Three outcomes, and each has its own next step** config asked + something follows -> the chain is through and the work becomes
   content. config asked + still nothing -> the gate was real and the *document* is wrong; the next variable is its frame, with the
-  archive as the reference. config not asked after a boot -> the trigger is neither the route nor the boot, and the archived page
+  archive as the reference. config not asked after a boot -> the trigger is neither the route nor the boot. Then the archived page
   becomes the cheapest way to find out whether *any* real document gets this client to ask for something.
 - **Result of the boot, 2026-10-17 13:14:06Z: branch (3), the request is not per-boot** The handset was rebooted and the Store opened
   once. The session gained **one** exchange: the page fetch at `13:14:06`, `200`, and before it **no** `/v8/Configuration` request on
@@ -1902,7 +1902,7 @@ Each one changes **a single variable**, and each names the value it replaced so 
   these same request headers: the built page -> accepted, cached, nothing on screen and nothing after it; the control -> `0xc00cee23`;
   the archived v8 page -> `88675309`. Three documents, three verdicts, so the client runs a page **validator** whose failures are
   visible, and the interesting one is the document that passes it and still yields no items - ours.
-- **What that turns into, and it is the next experiment** A validator that answers differently is a probe: take the page the client
+- **What that turns into, and it is the next experiment** A validator that answers differently is a probe. Take the page the client
   *accepts* and rename one construct at a time (`Panes` -> `PanesX`, `Templates` -> `TemplatesX`, `DataSource` -> `DataSourceX`, ...).
   A construct the validator reads will flip the outcome from silence to an error; a construct it never looks at will stay silent. That
   maps which parts of the document are consumed at all, which is exactly the question six content experiments could not answer.
@@ -1972,7 +1972,7 @@ Each one changes **a single variable**, and each names the value it replaced so 
   `/v8/catalog/queries?prefix=f` suggestions in the same second, which is the operator typing in the Store's search box. The
   ordering that made it look causal is what a human does after changing a config value, and the device id on that request says
   whose it was.
-- **Why that mattered, and what it re-opens** A pane source that is written and never fetched is not a content problem: the client
+- **Why that mattered, and what it re-opens** A pane source that is written and never fetched is not a content problem. The client
   rejects the pane before it builds a download. The parser's own paths say what it needs to build one (`/Panes/Pane`,
   `/Templates/Template`), so a pane becomes a list through a **feed type and a URL pair**, and the lab had been sending
   `<Type>Collection</Type>` - a **page-family** token from a different pool (@29064, beside `sDynamicHub` @29010 and the page types)
@@ -1987,9 +1987,9 @@ Each one changes **a single variable**, and each names the value it replaced so 
 - **What the next open decides, and it is a binary** Either the client now asks for `chunkSize=25&category=…` - the pane built, the
   chain through - or it does not, and the field is not read at all. Both outcomes are worth more than another page body, because the
   first one turns "the page parses" into "the page is used", which no document experiment has managed.
-- **Does not establish** Which of the two `<Type>` fields the client feeds into `Create StoreObjects`, or that it uses either: this
+- **Does not establish** Which of the two `<Type>` fields the client feeds into `Create StoreObjects`, or that it uses either. This
   entry reads the pools and the counts, not the call. It also does not prove the absolute path in the parser is where a *served*
-  path resolves - `/Panes/Pane` is a path from the document root, and only the device says which root.
+  path resolves. `/Panes/Pane` is a path from the document root, and only the device says which root.
 - **Undo** `paneType` back to `Collection` and `POST /__lab/reload` - the delivered page then returns to the shape of `05:29:53Z`.
   (Done the same morning; see F-037 for why the arm was withdrawn before the handset ever saw it.)
 
@@ -2009,19 +2009,19 @@ Each one changes **a single variable**, and each names the value it replaced so 
   reading instead of the guess.
 - **Measured: what a hub is drawn from, in the UI's own vocabulary** The same FFU region that carries the page's style names also
   carries the pane kinds the UI knows (`Store_HubCollectionUI_*`, `Store_HubFeaturedItemUI_*`) and the empty state
-  `ForYouEmptyListUI_NoResults_Test`. So a hub draws a **background pane** with a picture, then one layout per pane; an empty hub is
-  a picture with nothing under it - which is exactly what the handset shows, and it is a rendering of "no items", not of "no page".
-- **Measured: the endpoint table names the page id and the art types** The same block, as text: the store page endpoint takes the id
-  the client asks with (`typeId`) and answers a **layout**; the image endpoints are keyed by guid and `imagetype`, and they are what
+  `ForYouEmptyListUI_NoResults_Test`. So a hub draws a **background pane** with a picture, then one layout per pane. An empty hub is
+  a picture with nothing under it. That is exactly what the handset shows, and it is a rendering of "no items", not of "no page".
+- **Measured: the endpoint table names the page id and the art types** The same block, read as text: the store page endpoint takes the id
+  the client asks with (`typeId`) and answers a **layout**. The image endpoints are keyed by guid and `imagetype`, and they are what
   the background pane would draw from.
 - **The single variable now armed, and it is a position** `/Panes/Pane` is an absolute path and the page document has two roots it
   could be read from: the page's own (`<StorePage>`, every delivery so far) and the feed nested inside it, which carries the
   entries (`/feed/entry`) and has never carried a pane. `livestore.protocol.panesInFeed` was **`true`**, with the response header
   `x-lab-pane-placement` saying `feed` or `page` so no capture can be read as the wrong arm. Suite **156/156**, exit 0, with a new
   check asserting the move: same panes, same count, other parent.
-- **Why this is the next reading and not another guess** Three arrangements of content have been served and all three drew an
+- **Why this is the next reading and not another guess** Three arrangements of content have been served, and all three drew an
   empty hub: panes with a reference and no items, panes with inline items and no data source, panes with inline items and a data
-  source. What has never moved is where the panes sit, and the only path that names them is absolute - so the document under test
+  source. What has never moved is where the panes sit, and the only path that names them is absolute. So the document under test
   and the document the parser describes differ by exactly one parent element. If the blue background stayed after this, the
   placement would not be the gate either, and the remaining candidate would be the page root's own identity.
 - **Read the same morning, and the arm answers itself: no** `npm run page:diff` on the fed-placed page reports `/Panes/Pane` and
@@ -2056,16 +2056,16 @@ Each one changes **a single variable**, and each names the value it replaced so 
 - **Date** 2026-10-20 · **Area** `src/store/protocol.mjs`, and the rule this project spends its register on · **Method** the module
   read line by line against its own comments, then the resolver called directly instead of the server.
 - **What the code said and did** `dataSourceType(value)` carried a comment promising that an unknown name "reads as the type that is
-  served *and is logged where it happens*". It returned the fallback string, and the promise was never implemented: there is no
-  logger in the function and no caller logged the substitution, so `dataSourceType: "Applicatons"` in `config.json` produced an
-  ordinary page with `<Type>Applications</Type>` in every pane and **nothing anywhere** recording that the value armed was not the
+  served *and is logged where it happens*". It returned the fallback string and never kept the promise: there is no
+  logger in the function, and no caller logged the substitution. So `dataSourceType: "Applicatons"` in `config.json` produced an
+  ordinary page with `<Type>Applications</Type>` in every pane, and **nothing anywhere** recorded that the value armed was not the
   value served. A capture of that run reads exactly like a capture of the armed value.
 - **Why this is a defect and not a nit** Every experiment here is one variable, and the reading is the capture. A config value that
   is silently replaced turns one variable into two and leaves no trace of which one ran - the same failure F-027 answered with a
   control and F-037 answers with a response header saying where the panes went.
 - **The change, three parts** `dataSourceType()` is now `resolveDataSourceType()` and returns `{ type, requested, substituted }`
   instead of a bare string, so the substitution is a value a caller cannot drop by accident. The page delivery names it, only when
-  it happens, in `x-lab-data-source-substituted: <requested>` - so the **absence** of that header is the statement "the armed value
+  it happens, in `x-lab-data-source-substituted: <requested>`. The **absence** of that header is the statement "the armed value
   is the value served". The same substitution writes one `logger.warn` line naming the three types the client has parsers for.
 - **Verified** `npm run selftest` **159/159**, exit 0, with three checks new: a known name is served as written and reports no
   substitution; an unknown one falls back to `Applications` *and* reports `substituted: true` beside the string it was given; and
@@ -2075,8 +2075,8 @@ Each one changes **a single variable**, and each names the value it replaced so 
   value has been `Applications` since the field was introduced), so this is a defect that was reachable and never reached. It also
   does not turn the fallback into a refusal - a typo still serves a page, because a client in the middle of a one-variable
   experiment should not be handed a `502` for a config mistake the operator can read in a header.
-- **Undo** Nothing to undo in `config.json`: no value changed. The code change is one function and two lines at the delivery, and
-  the three checks are what would notice a partial revert.
+- **Undo** Nothing to undo in `config.json`: no value changed. The code change is one function and two lines at the delivery. The
+  three checks are what would notice a partial revert.
 
 ## F-039 The configuration document derived its schemes from the listener, so an https fetch served a plaintext "Secure" base
 
@@ -2088,9 +2088,9 @@ Each one changes **a single variable**, and each names the value it replaced so 
   `ShopCdn` on `https://`, i.e. the document inverts both, because the function computed one scheme from the arrival and then gave
   the other to the setting whose *name* is what the client trusts.
 - **Why it survived** The suite's configuration probes all set `scheme: 'http'`, so the only branch ever exercised was the one that
-  happens to be right. That is the whole failure: a value derived from a request property that no check varied.
-- **The change** Each base carries the scheme its own name has in the client's shipped file - `Shop` on `http`, `ShopSecure`,
-  `Buy`, `Accounts`, `Review` and `Telemetry` on `https`, both CDNs on `http` - and only the **host** follows the request. The
+  happens to be right. That is the whole failure. A request property decided a value, and no check varied that property.
+- **The change** Each base carries the scheme its own name has in the client's shipped file: `Shop` on `http`, `ShopSecure`,
+  `Buy`, `Accounts`, `Review` and `Telemetry` on `https`, both CDNs on `http`. Only the **host** follows the request. The
   `scheme` parameter is gone from the builder and from its caller rather than left unused, because a parameter that decides nothing
   is the next reader's wrong assumption.
 - **Verified** both listeners from this PC: `ShopSecure` `https://marketplaceedgeservice.windowsphone.com/`, `Shop`
@@ -2115,7 +2115,7 @@ Each one changes **a single variable**, and each names the value it replaced so 
   identified by its path and not by the device. Every one of these was answered `502` by this lab, which is a route with no handler.
 - **Measured: the client has a downloader and a feed type for it** The same string table holds
   `PendingSuggestListDownload::{GetSendStream,GenerateBody,Begin,OnComplete}`, `GetApplicationSuggestionsRequest`, and
-  `PendingPrefixSearchListDownload::PostParseFixup` - a parse fixup, i.e. a reply document this class reads. Beside
+  `PendingPrefixSearchListDownload::PostParseFixup`, a parse fixup: a reply document this class reads. Beside
   `CMarketplaceObjectList_StoreObjects::CreateDownloader` and its log line `FeedType %S m_SourceUrl %S` sit the two names
   **`ApplicationSuggestions`** (@6228) and **`Suggestions`** (@6276), which is where the feed-type family lives - so a suggestion
   list is a feed with its own type, parsed by its own class, and not a variant of the application list.
@@ -2124,8 +2124,8 @@ Each one changes **a single variable**, and each names the value it replaced so 
   to a Bing-backed search identity, which is why its query names `includeAlbums`, `includeArtists`, `includeTracks` and
   `includePodcasts` next to `includeApplications` - the families a Zune-generation search answered, not the Store's app catalogue.
 - **The trap worth writing down** `/Phone/Prefix` (@12160) sits in the *payment address* table, between `/Address/Country` and
-  `/Phone/Extension`. A reader looking for the search's `prefix` finds it there and builds a `<Phone><Prefix>` request body for a
-  GET that carries its prefix in the query string. It is a billing phone-number prefix and has nothing to do with search.
+  `/Phone/Extension`. A reader looking for the search's `prefix` finds it there, and builds a `<Phone><Prefix>` request body for a
+  GET that carries its prefix in the query string. It is a billing phone-number prefix, and it has nothing to do with search.
 - **The negative that bounds it** The word `queries` **does not appear anywhere** in `ZMarketplace.strings.txt` - zero hits - so
   the URL this request uses is not spelled in this module: it is either assembled from parts or held by a component this readout
   never captured. Nothing here says which feed type name maps to which endpoint either; `ApplicationSuggestions` and `Suggestions`
@@ -2190,17 +2190,17 @@ Each one changes **a single variable**, and each names the value it replaced so 
   `E_BNS_DUPLICATE_ITEM`, `E_BNS_ITEM_NOT_FOUND` beside `szPushChannel`, `_channelName`,
   `_pushRawMessage`, `set_Digest`, `_nabMessageHeader`, `_nabMessageBody`, `_nabMessageDigest`.
 - **What that says, narrowly** Three names, three sentences. (1) A channel is registered against an endpoint the
-  client *asks for* (`GetWpnPhoneRegistrationEndpoint`) and then `Register`/`UnregisterWithPushChannel` act on
+  client *asks for* (`GetWpnPhoneRegistrationEndpoint`), and `Register`/`UnregisterWithPushChannel` then act on
   it - a registration flow, not a constant. (2) Delivery is a BNS message with its own classes
   (`BNSNotifyPushMsg`, `BNSNotifyNabSyncMsg`) and its own error codes. (3) A notification payload carries a
-  **NAB header, body and digest** - a framing this lab has no code for, because the lab has never answered a
+  **NAB header, body and digest**, a framing this lab has no code for: it has never answered a
   push request at all.
 - **What it changes here, and the honest answer is nothing yet** The lab has no push host hijacked, no capture of
   a push request, and no finding that a notification was ever delivered to this handset. This entry exists
-  because the vocabulary is what a later pass would start from, and because a zero on `notify.live.net` is the
-  kind of negative that stops someone from wiring up an MPNS endpoint that this client cannot be talking to.
+  because the vocabulary is where a later pass would start, and because a zero on `notify.live.net` is the
+  kind of negative that stops someone wiring up an MPNS endpoint this client cannot be talking to.
 - **Does not establish** That the client speaks BNS/WPN *to the exclusion of* NSP, that the `E_BNS_*` codes are
-  the ones a device meets, or which host `GetWpnPhoneRegistrationEndpoint` returns - that is a runtime answer and
+  the ones a device meets, or which host `GetWpnPhoneRegistrationEndpoint` returns. That last question is a runtime answer, whereas
   this is a byte search of a build. Nor that this build is the handset's: the phone runs `8.10.14219.0`, the
   image is `3058.50000.1445.1005`, and a vocabulary can differ between them.
 
@@ -2242,8 +2242,8 @@ Each one changes **a single variable**, and each names the value it replaced so 
   a document the lab has never served. Corrected the same day and compared byte for byte against the live delivery (58 427 = 58 427,
   identical except `<a:updated>` and `impressionId`), and the tool now prints the pane type and source it built. It is not yet covered
   by a suite check - the comparison above is the evidence, not a test.
-- **Does not establish** That the rows are missing rather than invisible: zero image requests say no row was built to draw, not why.
-  Nor that the bare `<title>` is what the client reads - that is what the armed value is for. And it does not close the pane kind:
+- **Does not establish** That the rows are missing rather than invisible. Zero image requests say no row was built to draw; they do not say why.
+  Nor that the bare `<title>` is what the client reads. That is what the armed value is for. And it does not close the pane kind:
   three values tried is three values, and the field may carry something that is not a code from that table at all.
 - **Undo** `appListEntryTitle` back to `false`, `paneType` back to `Collection`, then `POST /__lab/reload`.
 
@@ -2307,10 +2307,10 @@ restores the entry shape was aimed at the wrong document and the values are back
   number. The same flaw sits under F-035's conclusion that `offerMediaInstance` cost the list its art: that field is off, the
   document is the one that drew, and the request count is still zero. **A request count on a cached resource is not evidence of
   rendering**, and this register had been using it that way.
-- **What is left of the list problem, then** Either the list is drawn and the screen the operator called "azure" is another screen,
-  or the list is not drawn for a reason no response body here can show - and the next reading is the device's, not a document: one
+- **What is left of the list problem, then** Either the list is drawn, and the screen the operator called "azure" is another screen,
+  or the list is not drawn for a reason no response body here can show. The next reading is the device's, not a document: one
   search with the lab answering exactly the 10-17 bytes, and the screen described before and after.
-- **Does not establish** That the list is drawn today. It establishes that the bytes are the ones that drew once, which is the
+- **Does not establish** That the list is drawn today. It establishes that the bytes are the ones that drew once, and that is the
   strongest statement a response can make about itself. Nor does it say anything about the hub page: no document of this project
   has ever been followed by a request, and the pane question stays where F-037 left it.
 - **Undo** Nothing to undo: `appListRank: 4` and `appListEntryTitle: false` are the values the config carried before F-043/F-044,
@@ -2394,9 +2394,9 @@ restores the entry shape was aimed at the wrong document and the values are back
   the application list, none from the page. A client that walked `/Panes` would have had to fetch what those panes name; it did not
   fetch a single one. So the pane model is not built, and **every served-pane hypothesis since F-032 has been asking a question about
   a subtree the client never enters**.
-- **What that converts into** The failure is in the page's *frame* - the elements that lead a reader to the panes - and not in what a
+- **What that converts into** The failure is in the page's *frame*, in the elements that lead a reader to the panes, and not in what a
   pane carries. `paneType`, `CollectionId`, `DataSource`, `MaxItems`, `SubType`, the placement of the panes, and whether a pane holds
-  items or a reference are all inside the block the client skips: no value there can be the answer, which is why five of them have been
+  items or a reference all sit inside the block the client skips: no value there can be the answer, which is why five of them have been
   read as negatives.
 - **The two sources, and the one that has not been tried** The parser's path table says `/Panes/Pane` and `/Templates/Template`
   (handset module, 69 asserted offsets) - the spelling every page in this project has carried. The retail build's type table (F-041)
@@ -2409,7 +2409,7 @@ restores the entry shape was aimed at the wrong document and the values are back
   `content-length: 59229`, and the tool that prints the page prints the same document (`store-page.mjs` applies this switch and the
   image salt, 59 229 = 59 229).
 - **The reading is the one already built** The eight background guids are still in every pane, so a client that now walks the block
-  must fetch them: eight image requests mean the spelling was the gate, zero means it is not and the frame is wrong in a third way.
+  must fetch them. Eight image requests mean the spelling was the gate; zero means it is not, and the frame is wrong in a third way.
   Nobody has to watch the screen for that number.
 - **Suite** 168/168, exit 0, one check new: serving the other spelling renames the pane and the template and nothing else - the
   document renames back to the parser one exactly, which is the assertion that keeps this a one-variable change.
@@ -2430,7 +2430,7 @@ restores the entry shape was aimed at the wrong document and the values are back
   reader never enters `/Panes`, none of those can be the answer, and the negatives recorded in F-032, F-036, F-037, F-043 and F-048
   are all negatives *about a subtree that may never be parsed* - which is a weaker statement than each of them claimed.
 - **The control, built because the two outcomes look identical from outside** `serve: "control-pane"`: the page the client accepts,
-  cut off **four characters into the first pane's first child** - deliberately unparseable, with a correct `content-length`, served
+  cut off **four characters into the first pane's first child**, deliberately unparseable, with a correct `content-length`, served
   as `application/atom+xml`. E-008's control (F-027) cut the document at an arbitrary point and drew `0xc00cee23` on the handset,
   which proves the client reaches *a parser*; this one cuts at a known depth, so the answer separates a reader that never walks into
   `/Panes` from one that walks in and discards what it finds. A code on screen means it got there; the usual silence means it did not.
@@ -2462,7 +2462,7 @@ restores the entry shape was aimed at the wrong document and the values are back
 - **Verified from this PC** after `serve: "generated"` + `POST /__lab/reload`: `200`, **33 086 bytes**, no `x-lab-control` header,
   `x-lab-page-format: storePage`, `x-lab-pane-type: col`, `x-lab-pane-background: none`, body ending `</a:feed></StorePage>`.
   Suite **169/169**, exit 0.
-- **Does not establish** That the built page renders, or that any of the three reverted values is wrong: they were never delivered.
+- **Does not establish** That the built page renders, or that any of the three reverted values is wrong. They were never delivered.
   The next open is the first one in this session that shows the handset a page this lab built.
 - **Undo of the three cuts** Each is one value and none was read: `pageElements: "typetable"`, `pageFormat: "panes"`,
   `paneBackgroundImage: true`. `serve` stays `"generated"`: the control is not a thing to leave armed.
@@ -2476,8 +2476,8 @@ restores the entry shape was aimed at the wrong document and the values are back
   control (F-050); this is the first delivery in this session that was a built page, and it is the first that drew no code. What
   the screen showed instead is the client's own "not connected to the Store" dialog after a few seconds, then a spinner that never
   ends.
-- **Measured: nothing follows the page** Zero exchanges after it - no `DataSource` fetch for any of the eight panes, no image
-  request, no second page. A document the client had refused would have answered with a code; a document it wants more of would
+- **Measured: nothing follows the page** Zero exchanges after it: no `DataSource` fetch for any of the eight panes, no image
+  request, no second page. A document the client had refused would have answered with a code; one it wants more of would
   have produced a request. It produced neither, which is F-019's sign of a parsed page that yields no model.
 - **The one failure in the sequence, and it is this lab's** In the same 90 seconds the handset queried `www.msftncsi.com`,
   `discoveryservice.windowsphone.com`, `ssl-api.bing.com`, `sup.live.net.co` and the page host. Of those, `ssl-api.bing.com` was
@@ -2505,7 +2505,7 @@ restores the entry shape was aimed at the wrong document and the values are back
   query - the page host (`hijack`) - and **one** exchange, the page, `200`, **33 166 bytes**. It did **not** query or contact
   `discoveryservice.windowsphone.com`, although the name was hijacked and intercepted at that moment and it had resolved it nine
   minutes earlier. So the name is not on the path this open walks, and the next-candidate role F-051 gave it is withdrawn.
-- **What the silence now means** Page delivered, validator satisfied (no code), no follow-up of any kind - no `DataSource` fetch, no
+- **What the silence now means** Page delivered, validator satisfied (no code), no follow-up of any kind: no `DataSource` fetch, no
   image, no second page - and the screen spinning. Nine documents have now produced this same second group (F-027, F-032, F-049), and
   today's two repairs removed the two *errors* that were hiding it rather than changing it. The remaining defect is that the client
   builds no page model from a document whose every parser path it carries.
@@ -2548,6 +2548,7 @@ restores the entry shape was aimed at the wrong document and the values are back
   the page and stops, which is consistent with an empty model for any reason. It also does not tell whether `AggregateCache.uca` is
   written on exit or on a built model - the one write in the window (`14:13:32`) precedes the open that followed it, so this entry
   does not claim it as a signal.
+
 ## F-054 The hub's own UI names two item kinds, and the page now carries both
 
 - **Date** 2026-10-20 15:2x local · **Area** the page document · **Method** the UI asset names read on the mounted phone
@@ -2569,9 +2570,9 @@ restores the entry shape was aimed at the wrong document and the values are back
 - **Suite** **170/170**, exit 0, one check new (the featured pane is the first one and only the first) and one changed rather than
   weakened: the existing check that the served page and the header agree now reads both kinds off both surfaces, so a builder that
   wrote a kind the header did not report still fails.
-- **Does not establish** That the client draws either kind. The hypothesis is that a hub with only collection panes builds no
-  model, and the reading is the next open: an image request, a `DataSource` fetch, or an `AggregateCache.uca` write would each say
-  the panes were used; the same silence would say the kind is not the gate.
+- **Does not establish** That the client draws either kind. The hypothesis is still that a hub with only collection panes builds
+  no model. The reading is the next open: an image request, a `DataSource` fetch or an `AggregateCache.uca` write would each say
+  the panes were used, and the same silence would say the kind is not the gate.
 - **Undo** Empty `paneTypeFeatured` and put `paneType` back to `col`, then restart the lab.
 ## F-055 The featured pane is read and changes nothing either, so the kind is not the gate
 
@@ -2712,15 +2713,15 @@ restores the entry shape was aimed at the wrong document and the values are back
   *after* the page rather than before it, the reverse of the order E-008 and E-009 assumed. Neither is proven to matter; both are
   injected failures or inventions inside the loop.
 - **Does not establish** Which of the two orders the client requires, or that the configuration body is at fault. It establishes
-  only that the cache is excluded and that the configuration pair is what the client reaches for next.
+  one thing: the cache is excluded, and the configuration pair is what the client reaches for next.
 
 ## F-061 A lab that is green in the source can still be serving old code, so every code change ends in a restart
 
 - **Date** 2026-10-20 16:46 local · **Area** how this project is operated, not the protocol · **Method** the search fix was green
   in `npm run selftest` while the running lab (pid 11712, started 16:01) still answered `q=f` with 50 apps and no
   `x-lab-query-match`.
-- **Why it matters** `POST /__lab/reload` re-reads `config.json` only. Every change under `src/` reaches the device **only**
-  after the process is started again, and a capture taken in between is attributed to code that is not in the repository.
+- **Why it matters** `POST /__lab/reload` re-reads `config.json` and nothing else. Every change under `src/` reaches the device
+  **only** after the process is started again. A capture taken in between is attributed to code that is not in the repository.
 - **Fixed by** `tools/restart-lab.cmd` (wrapper, raises UAC) -> `tools/restart-lab.ps1`: stop by **port** (80/443/8899 tcp,
   53 udp), never by command line - an elevated node shows an **empty** `CommandLine` to a non-elevated query, so a name-based
   kill finds nothing and reports success - refuse to touch a non-node holder (Windows ICS parks a `svchost` on `0.0.0.0:53`
@@ -2802,10 +2803,10 @@ restores the entry shape was aimed at the wrong document and the values are back
   sum of both sides), so nothing is truncated. The seven inline ones are the reason a first pass counted 19: reading only
   `body.file` reports an empty buffer, which is a reader's bug and not a capture's. So the art the client fetched is decodable by an
   8.1 device - the images are not the reason nothing is painted.
-- **Measured: the screen** the operator reports the **home** drawing nothing, and reports browsing through searches - which is
-  only possible on a rendered list. So the failure is specific to the hub page document this lab generates for
-  `typeId=DynamicHub.Main`, not to the client's rendering, not to the art, and not to the entry shape: the list and the detail
-  answer with the **same** `buildApplicationListFeed` builder whose entries draw there.
+- **Measured: the screen** The operator reports the **home** drawing nothing, while browsing through searches does work, and that
+  is only possible on a rendered list. The failure is therefore specific to the hub page document this lab generates for
+  `typeId=DynamicHub.Main`. It is not the client's rendering, not the art and not the entry shape: the list and the detail
+  answer with the **same** `buildApplicationListFeed` builder, and its entries draw there.
 - **Confound, stated plainly** two things changed together: the suggestion route stopped answering `502`, and the phone rebooted.
   The clean comparison is the 16:47 open (cache cleared, no reboot, `queries` `502`, F-060): there the run stopped after six images
   and asked for the page again; here it goes on to details and a category. That is consistent with the `502` having been the gate,
@@ -2874,8 +2875,8 @@ restores the entry shape was aimed at the wrong document and the values are back
   accepts. This is the error F-058 reasoned about and the distinction F-058 missed: it served the archive's *arrangement* to an
   endpoint that never emitted that arrangement, kept the `<StorePage>` root, and read the silence as "the arrangement does not
   matter". The truth is narrower: for this endpoint the panes are **required**, and 88675309 is what it says when they are missing.
-- **A useful side effect** An error code is a better instrument than silence. From here the client distinguishes three outcomes for
-  a page: **error** (rejected at the envelope - the no-panes document), **title only** (accepted, sections refused - the panes
+- **A useful side effect** An error code is a better instrument than silence. The client now distinguishes three outcomes for a
+  page: **error** (rejected at the envelope - the no-panes document), **title only** (accepted, sections refused - the panes
   present with an invented `<Type>col</Type>`), and **drawn**. The middle one is where the work is, and it is a state the register
   did not have before tonight.
 - **Also fixed, and it mattered for the reading** `withoutPanes` was silently ignored whenever the document was an `<a:feed>`: the
@@ -2905,8 +2906,58 @@ restores the entry shape was aimed at the wrong document and the values are back
 - **What it establishes** The client parses the document, reaches the feed header and **paints it**, and the string it paints is
   ours. That is stronger than "the page is accepted": a document this lab built is on screen, with a value this lab chose. The
   template name is not what labels the page, so `hubTemplate` is a rendering hint and not a title source.
-- **A consequence to fix, not a finding** The label is the `typeId`-derived string, which is why it looks like a machine name. A
-  nicer title is a one-line change in the page builder, and now we know it lands on the screen.
+- **A consequence, not a finding** The label is the `typeId`-derived string, which is why it looks like a machine name. A nicer
+  title is a one-line change in the page builder. We now know it lands on the screen.
 - **Does not establish** Anything about the panes, which remain the open question: the header paints and the pane area is empty.
   The next variable is the pane's own vocabulary - `/SubType` and the `Type` *values*, neither of which any capture evidences -
   or the template block's numbers, which are evidenced.
+
+## F-068 The Live Store is the catalog now, on every surface the client asks
+
+- **Date** 2026-10-20 evening · **Area** the catalog behind the page, and the pictures on it · **Method**
+  `livestore.protocol.catalogFile` built from the Live Store API: `/apps/categories` names the categories,
+  then `/apps/search` is asked four generic terms per category, because that endpoint refuses a query
+  without a category, and the replies are unioned by id (`src/store/catalog-source.mjs`). Lab restarted
+  with `tools\restart-lab.cmd` (pid 21148), then every surface requested from this PC with the handset's
+  own query string.
+- **Measured: one catalog, every surface** `16` categories asked, `203` distinct apps, about `4` seconds at
+  startup. Every route answered `200` and named the same source, `x-lab-source: zinc:live store (203 apps)`:
+  `storePages` **309 541 bytes**, 15 sections; the application list **261 674**; `apps?q=facebook` 641;
+  `appCategories/windowsphone.Photo` 32 368; `queries` 585; `Configuration/Stores` 1 429. The last two have
+  no capture behind them and say so instead of pretending: `x-lab-source: built: no capture of this
+  endpoint exists`.
+- **Measured: the pictures are the entries' own** A catalog entry states the URL of its icon
+  (`https://cdn.store.live.net.co/icons/…`), the page build keeps guid → URL, and the image handler fetches
+  the bytes and hands them over from the host the phone already trusts. One icon, asked for through the CDN
+  host: `200`, `image/jpeg`, **46 829 bytes**, `x-lab-image: live-store`, with `x-lab-image-origin:` naming
+  the entry's own URL. `/__lab/images` counted the same request: `servedIcons 1`, `iconFailures 0`.
+- **Measured: where no picture is stated, the answer says so** The entries this lab maps carry the icon URL
+  and nothing for a background, so a `background` request is answered with the marked placeholder and the
+  response says `x-lab-image: placeholder`. A screenshot can tell the two arms apart without comparing
+  pixels.
+- **The title, which F-067 asked for** The feed's `<a:title>` is `Windows Store`.
+- **Does not establish** That the handset draws any of this: no device session was read for this entry, and
+  the screen is the only witness. Nor that 203 is the service's whole catalog, which is what four terms over
+  sixteen categories unioned to. Nor that the service has no background art, since only the field this lab
+  maps was read.
+
+## F-069 The key that makes the catalog work was in a tracked file; it lives outside the repository now
+
+- **Date** 2026-10-20 · **Area** configuration, and the repository itself · **Method** `config.json` is
+  tracked by git. `loadConfig` reads `ZINC_API_KEY` first and then a file beside it (`.zinc-key`,
+  `zinc.key`, `.env.zinc`, all of them in `.gitignore`), and each source was tried on its own.
+- **Measured: the order** With no variable set, the key comes from `.zinc-key`: `64` characters. With
+  `ZINC_API_KEY` exported, the variable wins. With neither, the field is empty and the lab serves the
+  catalog file, which is what the operator sees. The file exists because of the restart: the elevated
+  window inherits none of the shell's environment, and the lab that came up from it reports
+  `apiKeyConfigured: true` and assembled the `203` apps. So the file reaches the process the phone talks
+  to, not only the one a terminal started.
+- **The leak, and what was done about it** The key stood in `config.json` in two commits, both local and
+  never pushed. A `git grep` over every commit found it in exactly those two. Those commits were rewritten
+  to `REDACTED-ZINC-API-KEY`, the tip's tree is unchanged (`dd1a0265…`), and no reachable commit carries
+  the key now. Two checks in the suite hold the source order: **190/190**, exit 0.
+- **What a scrub does not do** It removes the copy in this repository. It does not un-leak the key. The
+  value has to be regenerated at the service, and any clone, bundle or backup taken before tonight still
+  holds the old commits.
+- **Does not establish** That the file is private. It is a plain file, readable by anything running as this
+  user. What it does is keep the key out of the repository, which is the thing that was wrong.
