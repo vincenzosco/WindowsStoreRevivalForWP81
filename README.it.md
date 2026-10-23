@@ -171,6 +171,10 @@ Due strade per metterlo sul telefono, e solo una è misurata end to end:
 - **Console del telefono**: `ca/install-root-ca.reg` importato da CMD Injector. Il `.reg` è scritto
   per quella console, ma nessuna misura dice che ci arrivi: vedi
   [Il lato telefono](#il-lato-telefono).
+- **WPinternals** (*Full Filesystem Access*): è la strada che questo documento indicava prima, per
+  montare il registro e importare il `.reg`. Nessuna misura qui la conferma, e il `.reg` generato è
+  nella forma che si aspetta la console del telefono, non necessariamente quella di un import sul
+  PC: sulla strada misurata l'entry si scrive con `reg add`.
 
 ## Catturare
 
