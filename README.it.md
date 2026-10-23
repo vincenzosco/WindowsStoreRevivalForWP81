@@ -519,9 +519,18 @@ stesso.
 }
 ```
 
+> Il `config.json` del repo adesso porta `"hubTemplate": "DynamicChart"`, armato come spike. La
+> pagina porta più di un nome candidato per la testata - questo nome di template, il `<a:title>` del
+> feed, il `typeId` richiesto - e cambiare solo questo valore li separa: se la testata legge
+> "Dynamic Chart" l'etichetta viene dal template, se legge ancora "Dynamic Hub" non è il template a
+> essere disegnato. `DynamicHub` è il valore base, e ripristinarlo è quella riga più
+> `POST /__lab/reload`.
+
 `catalogFile` viene riletto quando cambia: iterare su quello che il telefono mostra non richiede un
-riavvio. I cataloghi che il progetto porta sono due, entrambi dati inventati, con ogni editore che
-dice `Lab Fixture`, così nessun listino può passare per reale:
+riavvio.
+
+I cataloghi che il progetto porta sono due, entrambi dati inventati, con ogni editore che dice
+`Lab Fixture`, così nessun listino può passare per reale:
 
 - `src/store/fixtures/demo-catalog.json` - diciassette app su tutte e otto le categorie dichiarate,
   ed è il default: una pagina con una voce per sezione non si distingue da una pagina che non

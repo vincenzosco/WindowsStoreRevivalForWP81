@@ -207,6 +207,13 @@ and for that grammar the source is the device, not an archive.
 }
 ```
 
+> The `config.json` in the repo has `"hubTemplate": "DynamicChart"` right now, armed as a spike.
+> The page carries more than one candidate for the visible label - this template name, the feed's
+> `<a:title>`, the requested `typeId` - and changing only this value separates them: if the header
+> reads "Dynamic Chart" the label comes from the template; if it still reads "Dynamic Hub" the
+> template is not what is painted. `DynamicHub` is the base value, and restoring it is that one
+> line plus `POST /__lab/reload`.
+
 `catalogFile` is re-read when it changes, so iterating on what the device shows needs no restart.
 Two catalogs ship, both invented, every publisher reading `Lab Fixture`, so no listing can be
 mistaken for a real one:
