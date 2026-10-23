@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/store-logo.jpg" width="160" alt="The Store bag logo: a white shopping bag carrying the Windows flag, on blue">
+</p>
+
 <h1 align="center">Windows Store Revival for WP8.1</h1>
 
 <p align="center">

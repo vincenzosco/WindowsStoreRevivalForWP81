@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/store-logo.jpg" width="160" alt="Il logo dello Store: una borsa bianca con la bandiera di Windows, su fondo blu">
+</p>
+
 <h1 align="center">WP Store Lab</h1>
 
 <p align="center">
